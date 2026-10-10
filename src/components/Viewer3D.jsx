@@ -6,7 +6,7 @@ import { SceneManager } from '../three/SceneManager.js';
  * React рендерит пустой <div ref={containerRef}> и больше его не трогает,
  * а Three.js сам добавляет туда <canvas> — так они не конфликтуют за DOM.
  */
-export default function Viewer3D({ dimensions, materialKey }) {
+export default function Viewer3D({ dimensions, materialKey, doorOpen }) {
   const containerRef = useRef(null);
   const managerRef = useRef(null);
   const [webglError, setWebglError] = useState(false);
@@ -41,6 +41,11 @@ export default function Viewer3D({ dimensions, materialKey }) {
   useEffect(() => {
     managerRef.current?.setMaterial(materialKey);
   }, [materialKey]);
+
+  // 4. Открываем или закрываем дверцу (анимацию делает SceneManager).
+  useEffect(() => {
+    managerRef.current?.setDoorOpen(doorOpen);
+  }, [doorOpen]);
 
   return (
     <div className="viewer">

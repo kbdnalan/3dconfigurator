@@ -148,17 +148,30 @@ export function createCabinet(dimensions, materials, materialKey) {
   // Накладная дверца закрывает весь фасад, по краям — тонкий технологический зазор
   const doorWidth = W - 2 * DOOR_REVEAL;
   const doorHeight = H - 2 * DOOR_REVEAL;
-  const doorZ = D / 2 - DOOR / 2; // передняя плоскость дверцы = передняя граница габарита
+
+  // Шарнир (pivot) — пустая группа на оси петли: левый задний край дверцы.
+  // Three.js вращает объект вокруг его собственного начала координат,
+  // поэтому, поворачивая шарнир, мы вращаем дверцу вокруг петли, а не вокруг центра.
+  const doorPivot = new THREE.Group();
+  doorPivot.name = 'door-pivot';
+  doorPivot.position.set(-doorWidth / 2, 0, D / 2 - DOOR);
+
+  // Внутри шарнира дверца сдвинута так, что её левый задний край совпадает с петлёй.
+  // В закрытом положении передняя плоскость дверцы = передняя граница габарита.
   const door = createPanel(
     'door',
     [doorWidth, doorHeight, DOOR],
-    [0, H / 2, doorZ],
+    [doorWidth / 2, H / 2, DOOR / 2],
     body,
     true,
   );
   // Ручка — дочерний объект дверцы: её координаты считаются от центра дверцы
   door.add(createHandle(doorWidth, doorHeight, materials.handle));
-  cabinet.add(door);
+  doorPivot.add(door);
+  cabinet.add(doorPivot);
+
+  // Сохраняем ссылку на шарнир, чтобы SceneManager мог открывать дверцу
+  cabinet.userData.doorPivot = doorPivot;
 
   return cabinet;
 }

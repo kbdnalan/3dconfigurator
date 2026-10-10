@@ -6,8 +6,10 @@ import MaterialPicker from './MaterialPicker.jsx';
 export default function ControlPanel({
   dimensions,
   materialKey,
+  doorOpen,
   onDimensionChange,
   onMaterialChange,
+  onDoorToggle,
 }) {
   return (
     <div className="panel-inner">
@@ -31,6 +33,20 @@ export default function ControlPanel({
           Материал
         </h2>
         <MaterialPicker value={materialKey} onChange={onMaterialChange} />
+      </section>
+
+      <section className="panel-section" aria-labelledby="door-title">
+        <h2 id="door-title" className="panel-title">
+          Дверца
+        </h2>
+        <button
+          type="button"
+          className="door-button"
+          aria-pressed={doorOpen}
+          onClick={onDoorToggle}
+        >
+          {doorOpen ? 'Закрыть дверцу' : 'Открыть дверцу'}
+        </button>
       </section>
     </div>
   );

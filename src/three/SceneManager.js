@@ -11,6 +11,8 @@ const DEFAULT_VIEW_DIRECTION = new THREE.Vector3(0.9, 0.62, 1.55).normalize();
 // Основной свет падает слева-спереди-сверху: правый бок чуть темнее — появляется объём
 const LIGHT_DIRECTION = new THREE.Vector3(-0.6, 1.35, 0.9).normalize();
 const DIMENSION_MARGIN = 0.16; // запас вокруг тумбы под размерные линии и подписи, м
+const DOOR_OPEN_ANGLE = THREE.MathUtils.degToRad(100); // насколько открывается дверца
+const DOOR_DURATION = 600; // длительность открывания, мс
 
 /** Освобождает память видеокарты: геометрии объекта и удаляет HTML-подписи. */
 function disposeObject(object) {
@@ -35,6 +37,11 @@ export class SceneManager {
     this.cabinet = null;
     this.dimensionLines = null;
     this.hasCameraView = false;
+    // Состояние дверцы: 0 — закрыта, 1 — открыта. progress плавно идёт к target.
+    this.doorTarget = 0;
+    this.doorProgress = 0;
+    this.doorAngle = 0; // текущий угол открывания, радианы
+    this.lastFrameTime = null;
 
     this.initRenderer();
     this.initScene();
@@ -144,6 +151,7 @@ export class SceneManager {
     this.cabinet = createCabinet(this.dimensions, this.materials, this.materialKey);
     this.dimensionLines = createDimensions(this.dimensions, this.materials.dimensionLine);
     this.scene.add(this.cabinet, this.dimensionLines);
+    this.applyDoorAngle(); // новая тумба сохраняет текущее положение дверцы
 
     this.updateShadowCamera();
     this.fitCamera();
@@ -161,6 +169,48 @@ export class SceneManager {
       });
     }
     this.requestRender();
+  }
+
+  /** Открывает или закрывает дверцу с плавной анимацией. */
+  setDoorOpen(isOpen) {
+    if (this.disposed) return;
+    this.doorTarget = isOpen ? 1 : 0;
+    this.requestRender();
+  }
+
+  // ---------- Дверца ----------
+
+  /**
+   * Сдвигает doorProgress к doorTarget пропорционально прошедшему времени.
+   * Возвращает true, если дверца ещё в движении (нужен следующий кадр).
+   */
+  updateDoor(now) {
+    if (this.doorProgress === this.doorTarget) return false;
+
+    // Время с прошлого кадра: анимация идёт с одной скоростью при любой частоте экрана
+    const delta = this.lastFrameTime === null ? 16 : now - this.lastFrameTime;
+    const step = delta / DOOR_DURATION;
+    this.doorProgress =
+      this.doorTarget > this.doorProgress
+        ? Math.min(this.doorTarget, this.doorProgress + step)
+        : Math.max(this.doorTarget, this.doorProgress - step);
+
+    this.applyDoorAngle();
+    // Если открывающаяся дверца выходит за кадр — камера плавно отъезжает
+    this.fitCamera({ onlyIfCut: true });
+    return this.doorProgress !== this.doorTarget;
+  }
+
+  /** Поворачивает шарнир дверцы в соответствии с doorProgress. */
+  applyDoorAngle() {
+    const pivot = this.cabinet?.userData.doorPivot;
+    if (!pivot) return;
+    const t = this.doorProgress;
+    // Плавный старт и плавная остановка (smoothstep) вместо равномерного движения
+    const eased = t * t * (3 - 2 * t);
+    this.doorAngle = eased * DOOR_OPEN_ANGLE;
+    // Минус — правый край дверцы уходит вперёд, к зрителю (петли слева)
+    pivot.rotation.y = -this.doorAngle;
   }
 
   // ---------- Камера, свет, размер ----------
@@ -187,22 +237,35 @@ export class SceneManager {
     const tanV = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
     const tanH = tanV * this.camera.aspect;
 
-    // Для каждого из 8 углов габарита (с запасом под размерные линии) считаем,
-    // как далеко должна стоять камера, чтобы угол попал в кадр по ширине и по высоте
-    let distance = 0;
-    const corner = new THREE.Vector3();
+    // Точки, которые должны попасть в кадр: 8 углов габарита (с запасом под размеры)
+    const points = [];
     for (const x of [-W / 2 - m, W / 2 + m]) {
       for (const y of [0, H + m]) {
         for (const z of [-D / 2 - m, D / 2 + m]) {
-          corner.set(x, y, z).sub(target);
-          const depth = corner.dot(direction); // насколько угол ближе к камере, чем цель
-          distance = Math.max(
-            distance,
-            depth + Math.abs(corner.dot(right)) / tanH,
-            depth + Math.abs(corner.dot(up)) / tanV,
-          );
+          points.push(new THREE.Vector3(x, y, z));
         }
       }
+    }
+
+    // Если дверца открыта — добавляем её дальний край (петля слева спереди,
+    // край описывает дугу радиусом ≈ ширине тумбы)
+    if (this.doorAngle > 0) {
+      const edgeX = -W / 2 + W * Math.cos(this.doorAngle) - 0.05;
+      const edgeZ = D / 2 + W * Math.sin(this.doorAngle) + 0.05;
+      points.push(new THREE.Vector3(edgeX, 0, edgeZ), new THREE.Vector3(edgeX, H, edgeZ));
+    }
+
+    // Для каждой точки считаем, как далеко должна стоять камера,
+    // чтобы точка попала в кадр по ширине и по высоте; берём максимум
+    let distance = 0;
+    for (const point of points) {
+      const offset = point.sub(target);
+      const depth = offset.dot(direction); // насколько точка ближе к камере, чем цель
+      distance = Math.max(
+        distance,
+        depth + Math.abs(offset.dot(right)) / tanH,
+        depth + Math.abs(offset.dot(up)) / tanV,
+      );
     }
     return { radius, distance: distance * 1.08 }; // 8% — поля вокруг модели
   }
@@ -241,7 +304,8 @@ export class SceneManager {
   /** Подгоняет область, в которой считаются тени, под размер тумбы. */
   updateShadowCamera() {
     const { W, H, D } = this.getSize();
-    const extent = Math.max(W, D) / 2 + H + 0.3; // тень может быть длиннее самой тумбы
+    // Тень может быть длиннее самой тумбы, а открытая дверца выступает вперёд на свою ширину
+    const extent = Math.max(W, D) + H + 0.3;
     const lightDistance = Math.max(W, H, D) * 2 + 3;
 
     this.keyLight.target.position.set(0, 0, 0);
@@ -284,13 +348,20 @@ export class SceneManager {
     this.frameId = requestAnimationFrame(this.renderFrame);
   };
 
-  renderFrame = () => {
+  // now — время кадра в мс, его передаёт requestAnimationFrame
+  renderFrame = (now) => {
     this.frameId = null;
+    const doorMoving = this.updateDoor(now);
+    this.lastFrameTime = doorMoving ? now : null;
+
     // Пока камера «доезжает» по инерции (damping), update() вызывает событие 'change',
     // которое запросит следующий кадр. Когда движение затухнет — кадры прекратятся.
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
     this.labelRenderer.render(this.scene, this.camera);
+
+    // Дверца ещё движется — нужен следующий кадр
+    if (doorMoving) this.requestRender();
   };
 
   // ---------- Очистка ----------
