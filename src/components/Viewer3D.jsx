@@ -1,20 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { SceneManager } from '../three/SceneManager.js';
 
-/**
- * Область 3D-просмотра.
- * React рендерит пустой <div ref={containerRef}> и больше его не трогает,
- * а Three.js сам добавляет туда <canvas> — так они не конфликтуют за DOM.
- */
-export default function Viewer3D({ dimensions, materialKey, doorOpen }) {
+export default function Viewer3D({ dimensions, materialKey }) {
   const containerRef = useRef(null);
   const managerRef = useRef(null);
   const [webglError, setWebglError] = useState(false);
   const { width, height, depth } = dimensions;
 
-  // 1. Создаём сцену один раз при монтировании и полностью удаляем при размонтировании.
-  //    Пустой массив зависимостей [] — эффект не перезапускается при смене параметров,
-  //    поэтому новый WebGL-renderer не создаётся.
   useEffect(() => {
     let manager;
     try {
@@ -32,20 +24,13 @@ export default function Viewer3D({ dimensions, materialKey, doorOpen }) {
     };
   }, []);
 
-  // 2. Размеры изменились — перестраиваем только модель, renderer остаётся тем же.
   useEffect(() => {
     managerRef.current?.setDimensions({ width, height, depth });
   }, [width, height, depth]);
 
-  // 3. Материал изменился — меняем материал деталей.
   useEffect(() => {
     managerRef.current?.setMaterial(materialKey);
   }, [materialKey]);
-
-  // 4. Открываем или закрываем дверцу (анимацию делает SceneManager).
-  useEffect(() => {
-    managerRef.current?.setDoorOpen(doorOpen);
-  }, [doorOpen]);
 
   return (
     <div className="viewer">
@@ -58,10 +43,10 @@ export default function Viewer3D({ dimensions, materialKey, doorOpen }) {
       ) : (
         <p className="viewer-hint">
           <span className="hint-desktop">
-            Зажмите левую кнопку мыши — вращение · Колесо — масштаб
+            Перетаскивание — вращение · Колесо — масштаб · Клик по дверце — открыть
           </span>
           <span className="hint-touch">
-            Проведите пальцем — вращение · Щипок — масштаб
+            Палец — вращение · Щипок — масштаб · Касание дверцы — открыть
           </span>
         </p>
       )}

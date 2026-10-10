@@ -1,6 +1,5 @@
 import { MATERIALS } from '../config.js';
 
-/** Блок выбора материала: три кнопки-образца. */
 export default function MaterialPicker({ value, onChange }) {
   return (
     <div className="materials" role="group" aria-label="Материал корпуса">

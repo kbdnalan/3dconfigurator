@@ -1,8 +1,7 @@
-/* ---------- Переменные дизайна ---------- */
 :root {
   --bg: #f4f4f2;
   --surface: #ffffff;
-  --viewer-bg: #e4e5e7; /* совпадает с фоном 3D-сцены */
+  --viewer-bg: #e4e5e7;
   --text: #1d1f22;
   --text-muted: #6b6f76;
   --border: #e3e3e0;
@@ -48,12 +47,11 @@ input {
   color: inherit;
 }
 
-/* ---------- Каркас страницы ---------- */
 .app {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  height: 100dvh; /* учитывает адресную строку мобильных браузеров */
+  height: 100dvh;
   padding: 0 var(--gap) var(--gap);
 }
 
@@ -76,13 +74,12 @@ input {
 
 .app-main {
   flex: 1;
-  min-height: 0; /* позволяет дочерним элементам сжиматься внутри flex */
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--panel-width);
   gap: var(--gap);
 }
 
-/* ---------- 3D-область ---------- */
 .viewer-section {
   min-width: 0;
   min-height: 0;
@@ -114,7 +111,6 @@ input {
   cursor: grabbing;
 }
 
-/* Слой HTML-подписей размеров поверх canvas — мышь проходит сквозь него */
 .viewer-labels {
   position: absolute;
   inset: 0;
@@ -156,7 +152,6 @@ input {
   display: none;
 }
 
-/* На устройствах без мыши показываем подсказку для пальцев */
 @media (hover: none) and (pointer: coarse) {
   .hint-desktop {
     display: none;
@@ -176,7 +171,6 @@ input {
   color: var(--text-muted);
 }
 
-/* ---------- Панель параметров ---------- */
 .panel {
   min-height: 0;
   overflow-y: auto;
@@ -208,7 +202,6 @@ input {
   color: var(--text-muted);
 }
 
-/* ---------- Поле размера ---------- */
 .field {
   margin-bottom: 14px;
 }
@@ -280,7 +273,6 @@ input {
   font-weight: 500;
 }
 
-/* ---------- Выбор материала ---------- */
 .materials {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -306,30 +298,6 @@ input {
   border-color: #c9c9c5;
 }
 
-.door-button {
-  width: 100%;
-  height: 44px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    background 0.15s ease,
-    color 0.15s ease;
-}
-
-.door-button:hover {
-  background: #f4f4f2;
-}
-
-/* Дверца открыта — кнопка «нажата» */
-.door-button[aria-pressed='true'] {
-  background: var(--accent);
-  color: #ffffff;
-}
-
-.door-button:focus-visible,
 .material:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -347,7 +315,6 @@ input {
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
-/* Образец ореха — лёгкие «волокна» градиентом */
 .material-swatch--walnut {
   background-image: repeating-linear-gradient(
     96deg,
@@ -369,7 +336,6 @@ input {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- Планшеты и телефоны ---------- */
 @media (max-width: 900px) {
   .app {
     height: auto;

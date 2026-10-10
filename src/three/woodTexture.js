@@ -1,7 +1,5 @@
 import * as THREE from 'three';
 
-// Простой генератор псевдослучайных чисел с «зерном» (seed).
-// В отличие от Math.random(), он даёт одинаковый рисунок при каждом запуске.
 function createRandom(seed) {
   let state = seed;
   return () => {
@@ -12,10 +10,6 @@ function createRandom(seed) {
   };
 }
 
-/**
- * Рисует текстуру ореха на обычном <canvas> и превращает её в текстуру Three.js.
- * Никаких внешних картинок: основа — цвет #805333, поверх — тонкие волокна.
- */
 export function createWoodTexture(baseColor = '#805333') {
   const width = 512;
   const height = 1024;
@@ -25,11 +19,9 @@ export function createWoodTexture(baseColor = '#805333') {
   const ctx = canvas.getContext('2d');
   const random = createRandom(20240611);
 
-  // 1. Основной цвет древесины
   ctx.fillStyle = baseColor;
   ctx.fillRect(0, 0, width, height);
 
-  // 2. Широкие мягкие полосы — неравномерность тона, как у настоящего шпона
   for (let i = 0; i < 14; i += 1) {
     const x = random() * width;
     const bandWidth = 20 + random() * 60;
@@ -38,7 +30,6 @@ export function createWoodTexture(baseColor = '#805333') {
     ctx.fillRect(x, 0, bandWidth, height);
   }
 
-  // 3. Волокна — тонкие слегка волнистые вертикальные линии
   for (let i = 0; i < 180; i += 1) {
     const startX = random() * width;
     const amplitude = 1 + random() * 5;
@@ -60,7 +51,6 @@ export function createWoodTexture(baseColor = '#805333') {
     ctx.stroke();
   }
 
-  // 4. Лёгкий шум, чтобы поверхность не выглядела «нарисованной»
   const image = ctx.getImageData(0, 0, width, height);
   const { data } = image;
   for (let i = 0; i < data.length; i += 4) {
@@ -72,7 +62,6 @@ export function createWoodTexture(baseColor = '#805333') {
   ctx.putImageData(image, 0, 0);
 
   const texture = new THREE.CanvasTexture(canvas);
-  // Цвета на canvas заданы в sRGB — сообщаем это Three.js для правильной цветопередачи
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }

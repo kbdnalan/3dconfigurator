@@ -2,13 +2,7 @@ import { useState } from 'react';
 import { DIMENSION_LIMITS } from '../config.js';
 import { clampDimension, validateDimension } from '../utils/validation.js';
 
-/**
- * Поле одного размера в мм.
- * В поле можно временно ввести что угодно (например, стереть число),
- * но в 3D-модель уходит только корректное значение.
- */
 export default function DimensionField({ id, label, value, onChange }) {
-  // text — то, что сейчас написано в поле (может быть временно некорректным)
   const [text, setText] = useState(String(value));
   const [error, setError] = useState(null);
   const errorId = `${id}-error`;
@@ -18,11 +12,9 @@ export default function DimensionField({ id, label, value, onChange }) {
     setText(nextText);
     const result = validateDimension(nextText);
     setError(result.error);
-    if (result.value !== null) onChange(result.value); // модель обновляется сразу
+    if (result.value !== null) onChange(result.value);
   }
 
-  // При уходе из поля приводим текст в порядок:
-  // число вне диапазона «прижимаем» к границе, мусор заменяем последним верным значением
   function handleBlur() {
     if (!error) {
       setText(String(value));
