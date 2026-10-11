@@ -8,11 +8,13 @@ export default function ControlPanel({
   materialKey,
   timeOfDay,
   dimensionsVisible,
+  resetToken,
   onDimensionChange,
   onMaterialChange,
   onTimeOfDayChange,
   onTimeOfDayPreset,
   onDimensionsVisibleChange,
+  onReset,
 }) {
   return (
     <div className="panel-inner">
@@ -22,7 +24,7 @@ export default function ControlPanel({
         </h2>
         {DIMENSION_FIELDS.map(({ key, label }) => (
           <DimensionField
-            key={key}
+            key={`${key}-${resetToken}`}
             id={`dimension-${key}`}
             label={label}
             value={dimensions[key]}
@@ -58,6 +60,10 @@ export default function ControlPanel({
           <span className="switch-label">Размерные линии</span>
         </label>
       </section>
+
+      <button type="button" className="reset-button" onClick={onReset}>
+        Сбросить настройки
+      </button>
     </div>
   );
 }
