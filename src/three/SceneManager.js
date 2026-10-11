@@ -1,13 +1,19 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createMaterials } from './materials.js';
 import { createCabinet, MM } from './createCabinet.js';
 import { createDimensions } from './createDimensions.js';
+import { createRoom } from './createRoom.js';
 
-const BACKGROUND = '#e4e5e7';
+const BACKGROUND = '#e7e3dd';
 const DEFAULT_VIEW_DIRECTION = new THREE.Vector3(0.9, 0.62, 1.55).normalize();
-const LIGHT_DIRECTION = new THREE.Vector3(-0.6, 1.35, 0.9).normalize();
+const LIGHT_DIRECTION = new THREE.Vector3(1, 1.25, 0.65).normalize();
 const DIMENSION_MARGIN = 0.16;
 const DOOR_OPEN_ANGLE = THREE.MathUtils.degToRad(100);
 const DOOR_DURATION = 600;
@@ -29,6 +35,7 @@ export class SceneManager {
     this.materialKey = 'white';
     this.cabinet = null;
     this.dimensionLines = null;
+    this.room = null;
     this.hasCameraView = false;
     this.doorTarget = 0;
     this.doorProgress = 0;
@@ -39,7 +46,7 @@ export class SceneManager {
     this.initScene();
     this.initCamera();
     this.initLights();
-    this.initFloor();
+    this.initPostprocessing();
     this.initDoorClick();
     this.materials = createMaterials(this.renderer.capabilities.getMaxAnisotropy());
 
@@ -68,6 +75,15 @@ export class SceneManager {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(BACKGROUND);
     scene.fog = new THREE.Fog(BACKGROUND, 20, 45);
+
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const roomEnvironment = new RoomEnvironment();
+    this.environmentMap = pmrem.fromScene(roomEnvironment, 0.04).texture;
+    roomEnvironment.dispose();
+    pmrem.dispose();
+    scene.environment = this.environmentMap;
+    scene.environmentIntensity = 0.4;
+
     this.scene = scene;
   }
 
@@ -87,10 +103,10 @@ export class SceneManager {
   }
 
   initLights() {
-    this.hemiLight = new THREE.HemisphereLight('#ffffff', '#c9c4bc', 2.2);
+    this.hemiLight = new THREE.HemisphereLight('#f2f2f0', '#b3a693', 0.35);
     this.scene.add(this.hemiLight);
 
-    const keyLight = new THREE.DirectionalLight('#ffffff', 2.4);
+    const keyLight = new THREE.DirectionalLight('#fff7ee', 3.2);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.set(2048, 2048);
     keyLight.shadow.bias = -0.0004;
@@ -98,22 +114,31 @@ export class SceneManager {
     this.scene.add(keyLight);
     this.scene.add(keyLight.target);
     this.keyLight = keyLight;
-
-    this.fillLight = new THREE.DirectionalLight('#ffffff', 0.45);
-    this.fillLight.position.set(4, 3, -3);
-    this.scene.add(this.fillLight);
   }
 
-  initFloor() {
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(120, 120),
-      new THREE.MeshStandardMaterial({ color: '#d9dadc', roughness: 1, metalness: 0 }),
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.y = -0.0005;
-    floor.receiveShadow = true;
-    this.floor = floor;
-    this.scene.add(floor);
+  initPostprocessing() {
+    const renderTarget = new THREE.WebGLRenderTarget(1, 1, {
+      type: THREE.HalfFloatType,
+      samples: 4,
+    });
+    this.composer = new EffectComposer(this.renderer, renderTarget);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+
+    this.aoPass = new GTAOPass(this.scene, this.camera, 1, 1);
+    this.aoPass.output = GTAOPass.OUTPUT.Default;
+    this.aoPass.blendIntensity = 1;
+    this.aoPass.updateGtaoMaterial({
+      radius: 0.25,
+      distanceExponent: 1,
+      thickness: 1,
+      scale: 1,
+      samples: 16,
+    });
+    this.aoPass.updatePdMaterial({ radius: 6, rings: 2, samples: 16 });
+    this.composer.addPass(this.aoPass);
+
+    this.outputPass = new OutputPass();
+    this.composer.addPass(this.outputPass);
   }
 
   setDimensions(dimensions) {
@@ -122,10 +147,12 @@ export class SceneManager {
 
     this.removeObject(this.cabinet);
     this.removeObject(this.dimensionLines);
+    this.removeObject(this.room);
 
     this.cabinet = createCabinet(this.dimensions, this.materials, this.materialKey);
     this.dimensionLines = createDimensions(this.dimensions, this.materials.dimensionLine);
-    this.scene.add(this.cabinet, this.dimensionLines);
+    this.room = createRoom(this.dimensions, this.materials);
+    this.scene.add(this.room, this.cabinet, this.dimensionLines);
     this.applyDoorAngle();
 
     this.updateShadowCamera();
@@ -322,12 +349,21 @@ export class SceneManager {
     if (width === 0 || height === 0) return;
 
     this.renderer.setSize(width, height, false);
+    this.composer.setSize(width, height);
     this.labelRenderer.setSize(width, height);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.fitCamera({ onlyIfCut: true });
     this.requestRender();
   };
+
+  updateWallVisibility() {
+    if (!this.room) return;
+    const { backSide, leftSide, backZ, leftX } = this.room.userData;
+    const { x, z } = this.camera.position;
+    backSide.visible = z > backZ;
+    leftSide.visible = x > leftX;
+  }
 
   requestRender = () => {
     if (this.disposed || this.frameId !== null) return;
@@ -340,7 +376,8 @@ export class SceneManager {
     this.lastFrameTime = doorMoving ? now : null;
 
     this.controls.update();
-    this.renderer.render(this.scene, this.camera);
+    this.updateWallVisibility();
+    this.composer.render();
     this.labelRenderer.render(this.scene, this.camera);
 
     if (doorMoving) this.requestRender();
@@ -367,13 +404,16 @@ export class SceneManager {
 
     this.removeObject(this.cabinet);
     this.removeObject(this.dimensionLines);
-    this.floor.geometry.dispose();
-    this.floor.material.dispose();
+    this.removeObject(this.room);
     this.materials.dispose();
+    this.environmentMap.dispose();
     this.keyLight.dispose();
-    this.fillLight.dispose();
     this.hemiLight.dispose();
     this.scene.clear();
+
+    this.aoPass.dispose();
+    this.outputPass.dispose();
+    this.composer.dispose();
 
     this.renderer.dispose();
     this.renderer.forceContextLoss();
