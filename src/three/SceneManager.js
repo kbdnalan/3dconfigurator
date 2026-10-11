@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+﻿import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -17,6 +17,7 @@ const DEFAULT_VIEW_DIRECTION = new THREE.Vector3(1.15, 0.55, 1).normalize();
 const DEFAULT_ZOOM_OUT = 1.3;
 const DIMENSION_MARGIN = 0.16;
 const WALL_MARGIN = 0.1;
+const CABINET_MARGIN = 0.08;
 const FLOOR_MARGIN = 0.12;
 const MAX_BELOW_CENTER_ANGLE = THREE.MathUtils.degToRad(20);
 const SUN_DISTANCE = 12;
@@ -125,6 +126,7 @@ export class SceneManager {
     controls.rotateSpeed = 0.8;
     controls.zoomSpeed = 0.9;
     controls.minPolarAngle = 0.15;
+    controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
     controls.addEventListener('change', this.requestRender);
     this.controls = controls;
   }
@@ -218,8 +220,17 @@ export class SceneManager {
   setMode(mode) {
     if (this.disposed) return;
     this.mode = mode;
-    this.controls.enableRotate = mode === 'rotate';
-    this.renderer.domElement.style.cursor = mode === 'move' ? 'grab' : '';
+    const moving = mode === 'move';
+    this.controls.mouseButtons = {
+      LEFT: moving ? null : THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.ROTATE,
+    };
+    this.controls.touches = {
+      ONE: moving ? null : THREE.TOUCH.ROTATE,
+      TWO: moving ? THREE.TOUCH.DOLLY_ROTATE : THREE.TOUCH.DOLLY_PAN,
+    };
+    this.renderer.domElement.style.cursor = moving ? 'grab' : '';
   }
 
   setPlacement(x, z) {
@@ -414,7 +425,7 @@ export class SceneManager {
     }
     this.pointerDown = { x: event.clientX, y: event.clientY };
 
-    if (this.mode !== 'move' || !this.dimensions) return;
+    if (this.mode !== 'move' || !this.dimensions || event.button !== 0) return;
     const floorPoint = this.getFloorPoint(event);
     if (!floorPoint) return;
     this.drag = {
@@ -667,26 +678,85 @@ export class SceneManager {
 
   updateViewCamera() {
     const target = this.controls.target;
-    const offset = this.cameraOffset.copy(this.camera.position).sub(target);
-    let scale = 1;
+    const position = this.cameraOffset.copy(this.camera.position);
 
     if (this.room) {
       const { width, depth } = this.room.userData;
-      const limit = (origin, delta, min, max) => {
-        if (delta < 0 && origin + delta < min) return (min - origin) / delta;
-        if (delta > 0 && origin + delta > max) return (max - origin) / delta;
-        return 1;
-      };
-      scale = Math.min(
-        limit(target.x, offset.x, -width / 2 + WALL_MARGIN, width / 2 - WALL_MARGIN),
-        limit(target.z, offset.z, -depth / 2 + WALL_MARGIN, depth / 2 - WALL_MARGIN),
-        limit(target.y, offset.y, this.getFloorLimit(), ROOM_HEIGHT - WALL_MARGIN),
-      );
+      const { clamp } = THREE.MathUtils;
+      position.x = clamp(position.x, -width / 2 + WALL_MARGIN, width / 2 - WALL_MARGIN);
+      position.z = clamp(position.z, -depth / 2 + WALL_MARGIN, depth / 2 - WALL_MARGIN);
+      position.y = clamp(position.y, this.getFloorLimit(), ROOM_HEIGHT - WALL_MARGIN);
+      this.pushOutOfCabinet(position, width, depth);
     }
 
-    this.viewCamera.position.copy(target).addScaledVector(offset, Math.max(scale, 0));
-    this.viewCamera.quaternion.copy(this.camera.quaternion);
+    this.viewCamera.position.copy(position);
+    if (position.equals(this.camera.position)) {
+      this.viewCamera.quaternion.copy(this.camera.quaternion);
+    } else {
+      this.viewCamera.lookAt(target);
+    }
     this.viewCamera.updateMatrixWorld();
+  }
+
+  pushOutOfCabinet(position, roomWidth, roomDepth) {
+    if (!this.dimensions) return;
+    const { W, H, D } = this.getSize();
+    const margin = CABINET_MARGIN;
+    const center = this.placement.position;
+    const min = new THREE.Vector3(
+      center.x - W / 2 - margin,
+      0,
+      center.z - D / 2 - margin,
+    );
+    const max = new THREE.Vector3(
+      center.x + W / 2 + margin,
+      H + margin,
+      center.z + D / 2 + margin,
+    );
+    const inside =
+      position.x > min.x &&
+      position.x < max.x &&
+      position.y < max.y &&
+      position.z > min.z &&
+      position.z < max.z;
+    if (!inside) return;
+
+    const exits = [
+      {
+        axis: 'y',
+        value: max.y,
+        cost: max.y - position.y,
+        ok: max.y < ROOM_HEIGHT - WALL_MARGIN,
+      },
+      {
+        axis: 'x',
+        value: min.x,
+        cost: position.x - min.x,
+        ok: min.x > -roomWidth / 2 + WALL_MARGIN,
+      },
+      {
+        axis: 'x',
+        value: max.x,
+        cost: max.x - position.x,
+        ok: max.x < roomWidth / 2 - WALL_MARGIN,
+      },
+      {
+        axis: 'z',
+        value: min.z,
+        cost: position.z - min.z,
+        ok: min.z > -roomDepth / 2 + WALL_MARGIN,
+      },
+      {
+        axis: 'z',
+        value: max.z,
+        cost: max.z - position.z,
+        ok: max.z < roomDepth / 2 - WALL_MARGIN,
+      },
+    ].filter((exit) => exit.ok);
+    if (!exits.length) return;
+
+    const best = exits.reduce((a, b) => (b.cost < a.cost ? b : a));
+    position[best.axis] = best.value;
   }
 
   handleResize = () => {
