@@ -126,7 +126,6 @@ export class SceneManager {
     controls.rotateSpeed = 0.8;
     controls.zoomSpeed = 0.9;
     controls.minPolarAngle = 0.15;
-    controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
     controls.addEventListener('change', this.requestRender);
     this.controls = controls;
   }
@@ -224,7 +223,7 @@ export class SceneManager {
     this.controls.mouseButtons = {
       LEFT: moving ? null : THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.DOLLY,
-      RIGHT: THREE.MOUSE.ROTATE,
+      RIGHT: moving ? THREE.MOUSE.ROTATE : null,
     };
     this.controls.touches = {
       ONE: moving ? null : THREE.TOUCH.ROTATE,
