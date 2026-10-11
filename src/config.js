@@ -28,4 +28,7 @@ export const TIME_OF_DAY = {
   max: 21,
   step: 0.25,
   initial: 15,
+  day: 13,
+  night: 21,
+  nightFrom: 20,
 };

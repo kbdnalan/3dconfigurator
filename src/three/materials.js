@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { MATERIALS } from '../config.js';
 import { createWoodTexture } from './woodTexture.js';
 import { createParquetTexture } from './parquetTexture.js';
-import { ROOM_DEPTH, ROOM_WIDTH } from './createRoom.js';
 
 const ROUGHNESS = {
   white: 0.78,
@@ -17,7 +16,6 @@ export function createMaterials(maxAnisotropy = 1) {
 
   const parquetTexture = createParquetTexture();
   parquetTexture.anisotropy = Math.min(16, maxAnisotropy);
-  parquetTexture.repeat.set(ROOM_WIDTH, ROOM_DEPTH);
 
   const body = {};
   MATERIALS.forEach(({ key, color }) => {

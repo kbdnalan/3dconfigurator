@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { MM } from './createCabinet.js';
 
-export const ROOM_WIDTH = 3.8;
-export const ROOM_DEPTH = 4.4;
+export const MIN_ROOM_WIDTH = 3.8;
+export const MIN_ROOM_DEPTH = 4.4;
 export const ROOM_HEIGHT = 2.7;
 export const WALL_GAP = 20 * MM;
 
@@ -22,33 +22,33 @@ function box(size, position, material, castShadow = true) {
   return mesh;
 }
 
-function createWindowWall(materials) {
+function createWindowWall(materials, width, depth) {
   const group = new THREE.Group();
-  const x = -ROOM_WIDTH / 2 - WALL / 2;
+  const x = -width / 2 - WALL / 2;
   const z0 = WINDOW.start;
   const z1 = WINDOW.start + WINDOW.width;
   const y0 = WINDOW.sill;
   const y1 = WINDOW.sill + WINDOW.height;
   const openingHeight = y1 - y0;
 
-  group.add(box([WALL, y0, ROOM_DEPTH], [x, y0 / 2, ROOM_DEPTH / 2], materials.wall));
+  group.add(box([WALL, y0, depth], [x, y0 / 2, depth / 2], materials.wall));
   group.add(
     box(
-      [WALL, ROOM_HEIGHT - y1, ROOM_DEPTH],
-      [x, (y1 + ROOM_HEIGHT) / 2, ROOM_DEPTH / 2],
+      [WALL, ROOM_HEIGHT - y1, depth],
+      [x, (y1 + ROOM_HEIGHT) / 2, depth / 2],
       materials.wall,
     ),
   );
   group.add(box([WALL, openingHeight, z0], [x, (y0 + y1) / 2, z0 / 2], materials.wall));
   group.add(
     box(
-      [WALL, openingHeight, ROOM_DEPTH - z1],
-      [x, (y0 + y1) / 2, (z1 + ROOM_DEPTH) / 2],
+      [WALL, openingHeight, depth - z1],
+      [x, (y0 + y1) / 2, (z1 + depth) / 2],
       materials.wall,
     ),
   );
 
-  const frameX = -ROOM_WIDTH / 2 - WALL * 0.6;
+  const frameX = -width / 2 - WALL * 0.6;
   const zMid = (z0 + z1) / 2;
   const yMid = (y0 + y1) / 2;
   const frame = materials.frame;
@@ -77,7 +77,7 @@ function createWindowWall(materials) {
   group.add(
     box(
       [sillDepth, 0.03, WINDOW.width + 0.12],
-      [-ROOM_WIDTH / 2 - WALL + sillDepth / 2, y0 - 0.015, zMid],
+      [-width / 2 - WALL + sillDepth / 2, y0 - 0.015, zMid],
       materials.baseboard,
     ),
   );
@@ -110,30 +110,34 @@ function createLamp(materials) {
 
   const light = new THREE.PointLight('#ffcf94', 0, 0, 2);
   light.position.y = -cordLength - 0.16;
+  light.castShadow = true;
+  light.shadow.mapSize.set(1024, 1024);
+  light.shadow.radius = 4;
+  light.shadow.bias = -0.002;
+  light.shadow.camera.near = 0.05;
+  light.shadow.camera.far = 8;
+  light.shadow.autoUpdate = false;
   lamp.add(light);
 
-  lamp.position.set(0, ROOM_HEIGHT, ROOM_DEPTH * 0.45);
+  lamp.position.y = ROOM_HEIGHT;
   return { lamp, light };
 }
 
-export function createRoom(materials) {
+export function createRoom(materials, width, depth) {
   const room = new THREE.Group();
   room.name = 'room';
-  const outerWidth = ROOM_WIDTH + 2 * WALL;
+  const outerWidth = width + 2 * WALL;
 
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(ROOM_WIDTH, ROOM_DEPTH),
-    materials.floor,
-  );
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), materials.floor);
   floor.rotation.x = -Math.PI / 2;
-  floor.position.set(0, -0.0005, ROOM_DEPTH / 2);
+  floor.position.set(0, -0.0005, depth / 2);
   floor.receiveShadow = true;
   room.add(floor);
 
   room.add(
     box(
-      [outerWidth, WALL, ROOM_DEPTH + 2 * WALL],
-      [0, ROOM_HEIGHT + WALL / 2, ROOM_DEPTH / 2],
+      [outerWidth, WALL, depth + 2 * WALL],
+      [0, ROOM_HEIGHT + WALL / 2, depth / 2],
       materials.ceiling,
     ),
   );
@@ -143,36 +147,36 @@ export function createRoom(materials) {
   room.add(
     box(
       [outerWidth, ROOM_HEIGHT, WALL],
-      [0, ROOM_HEIGHT / 2, ROOM_DEPTH + WALL / 2],
+      [0, ROOM_HEIGHT / 2, depth + WALL / 2],
       materials.wall,
     ),
   );
   room.add(
     box(
-      [WALL, ROOM_HEIGHT, ROOM_DEPTH],
-      [ROOM_WIDTH / 2 + WALL / 2, ROOM_HEIGHT / 2, ROOM_DEPTH / 2],
+      [WALL, ROOM_HEIGHT, depth],
+      [width / 2 + WALL / 2, ROOM_HEIGHT / 2, depth / 2],
       materials.wall,
     ),
   );
-  room.add(createWindowWall(materials));
+  room.add(createWindowWall(materials, width, depth));
 
-  const sideLength = ROOM_DEPTH - 2 * BASEBOARD_DEPTH;
+  const sideLength = depth - 2 * BASEBOARD_DEPTH;
   const boards = [
     [
-      [ROOM_WIDTH, BASEBOARD_HEIGHT, BASEBOARD_DEPTH],
+      [width, BASEBOARD_HEIGHT, BASEBOARD_DEPTH],
       [0, BASEBOARD_DEPTH / 2],
     ],
     [
-      [ROOM_WIDTH, BASEBOARD_HEIGHT, BASEBOARD_DEPTH],
-      [0, ROOM_DEPTH - BASEBOARD_DEPTH / 2],
+      [width, BASEBOARD_HEIGHT, BASEBOARD_DEPTH],
+      [0, depth - BASEBOARD_DEPTH / 2],
     ],
     [
       [BASEBOARD_DEPTH, BASEBOARD_HEIGHT, sideLength],
-      [ROOM_WIDTH / 2 - BASEBOARD_DEPTH / 2, ROOM_DEPTH / 2],
+      [width / 2 - BASEBOARD_DEPTH / 2, depth / 2],
     ],
     [
       [BASEBOARD_DEPTH, BASEBOARD_HEIGHT, sideLength],
-      [-ROOM_WIDTH / 2 + BASEBOARD_DEPTH / 2, ROOM_DEPTH / 2],
+      [-width / 2 + BASEBOARD_DEPTH / 2, depth / 2],
     ],
   ];
   boards.forEach(([size, [x, z]]) => {
@@ -182,6 +186,6 @@ export function createRoom(materials) {
   const { lamp, light } = createLamp(materials);
   room.add(lamp);
 
-  room.userData = { lampLight: light };
+  room.userData = { lamp, lampLight: light, width, depth };
   return room;
 }

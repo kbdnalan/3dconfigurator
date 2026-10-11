@@ -2,11 +2,13 @@ import { useCallback, useState } from 'react';
 import { DEFAULT_DIMENSIONS, DEFAULT_MATERIAL, TIME_OF_DAY } from './config.js';
 import Viewer3D from './components/Viewer3D.jsx';
 import ControlPanel from './components/ControlPanel.jsx';
+import ErrorBoundary from './components/ErrorBoundary.jsx';
+import { useTimeOfDay } from './hooks/useTimeOfDay.js';
 
 export default function App() {
   const [dimensions, setDimensions] = useState(DEFAULT_DIMENSIONS);
   const [materialKey, setMaterialKey] = useState(DEFAULT_MATERIAL);
-  const [timeOfDay, setTimeOfDay] = useState(TIME_OF_DAY.initial);
+  const [timeOfDay, setTimeOfDay, animateTimeOfDay] = useTimeOfDay(TIME_OF_DAY.initial);
   const [dimensionsVisible, setDimensionsVisible] = useState(true);
 
   const handleDimensionChange = useCallback((key, value) => {
@@ -25,12 +27,14 @@ export default function App() {
 
       <main className="app-main">
         <section className="viewer-section" aria-label="3D-модель тумбы">
-          <Viewer3D
-            dimensions={dimensions}
-            materialKey={materialKey}
-            timeOfDay={timeOfDay}
-            dimensionsVisible={dimensionsVisible}
-          />
+          <ErrorBoundary>
+            <Viewer3D
+              dimensions={dimensions}
+              materialKey={materialKey}
+              timeOfDay={timeOfDay}
+              dimensionsVisible={dimensionsVisible}
+            />
+          </ErrorBoundary>
         </section>
 
         <aside className="panel" aria-label="Параметры тумбы">
@@ -42,6 +46,7 @@ export default function App() {
             onDimensionChange={handleDimensionChange}
             onMaterialChange={setMaterialKey}
             onTimeOfDayChange={setTimeOfDay}
+            onTimeOfDayPreset={animateTimeOfDay}
             onDimensionsVisibleChange={setDimensionsVisible}
           />
         </aside>

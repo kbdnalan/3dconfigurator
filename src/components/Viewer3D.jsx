@@ -54,6 +54,16 @@ export default function Viewer3D({
           Ваш браузер не поддерживает WebGL, поэтому 3D-модель не может быть показана.
         </div>
       ) : (
+        <button
+          type="button"
+          className="viewer-reset"
+          onClick={() => managerRef.current?.resetView()}
+        >
+          Исходный вид
+        </button>
+      )}
+
+      {!webglError && (
         <p className="viewer-hint">
           <span className="hint-desktop">
             Перетаскивание — вращение · Колесо — масштаб · Клик по дверце — открыть

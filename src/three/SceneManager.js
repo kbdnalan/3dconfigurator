@@ -11,9 +11,9 @@ import { createCabinet, MM } from './createCabinet.js';
 import { createDimensions } from './createDimensions.js';
 import {
   createRoom,
-  ROOM_DEPTH,
+  MIN_ROOM_DEPTH,
+  MIN_ROOM_WIDTH,
   ROOM_HEIGHT,
-  ROOM_WIDTH,
   WALL_GAP,
 } from './createRoom.js';
 import { getDaylight } from './daylight.js';
@@ -25,7 +25,8 @@ const WALL_MARGIN = 0.1;
 const FLOOR_MARGIN = 0.12;
 const MAX_BELOW_CENTER_ANGLE = THREE.MathUtils.degToRad(20);
 const SUN_DISTANCE = 12;
-const SHADOW_EXTENT = 4;
+const ROOM_CLEARANCE = 0.4;
+const CEILING_CLEARANCE = 0.25;
 const DOOR_OPEN_ANGLE = THREE.MathUtils.degToRad(100);
 const DOOR_DURATION = 600;
 const CLICK_TOLERANCE = 5;
@@ -46,6 +47,7 @@ export class SceneManager {
     this.materialKey = 'white';
     this.cabinet = null;
     this.dimensionLines = null;
+    this.room = null;
     this.dimensionsVisible = true;
     this.timeOfDay = 15;
     this.hasCameraView = false;
@@ -59,8 +61,6 @@ export class SceneManager {
     this.initPostprocessing();
     this.initDoorClick();
     this.materials = createMaterials(this.renderer.capabilities.getMaxAnisotropy());
-    this.room = createRoom(this.materials);
-    this.scene.add(this.room);
 
     this.resizeObserver = new ResizeObserver(this.handleResize);
     this.resizeObserver.observe(container);
@@ -124,14 +124,6 @@ export class SceneManager {
     sun.shadow.radius = 3;
     sun.shadow.bias = -0.0003;
     sun.shadow.normalBias = 0.03;
-    const shadowCamera = sun.shadow.camera;
-    shadowCamera.left = -SHADOW_EXTENT;
-    shadowCamera.right = SHADOW_EXTENT;
-    shadowCamera.top = SHADOW_EXTENT;
-    shadowCamera.bottom = -SHADOW_EXTENT;
-    shadowCamera.near = 0.5;
-    shadowCamera.far = SUN_DISTANCE + SHADOW_EXTENT * 2;
-    shadowCamera.updateProjectionMatrix();
     this.scene.add(sun, sun.target);
     this.sun = sun;
   }
@@ -181,7 +173,7 @@ export class SceneManager {
     );
     this.applyDoorAngles();
 
-    this.room.position.z = -this.getSize().D / 2 - WALL_GAP;
+    this.updateRoom();
     this.applyDaylight();
     this.fitCamera();
     this.requestRender();
@@ -206,6 +198,13 @@ export class SceneManager {
     this.requestRender();
   }
 
+  resetView() {
+    if (this.disposed) return;
+    this.hasCameraView = false;
+    this.fitCamera();
+    this.requestRender();
+  }
+
   setDimensionsVisible(visible) {
     if (this.disposed) return;
     this.dimensionsVisible = visible;
@@ -213,12 +212,57 @@ export class SceneManager {
     this.requestRender();
   }
 
+  updateRoom() {
+    const { D, H } = this.getSize();
+    const target = new THREE.Vector3(0, H / 2, 0);
+    const view = this.getCeilingSafeView(DEFAULT_VIEW_DIRECTION, target, 1, false);
+    const camera = view.direction.clone().multiplyScalar(view.distance);
+    const roundUp = (value) => Math.ceil(value * 10) / 10;
+    const width = roundUp(
+      Math.max(MIN_ROOM_WIDTH, 2 * (Math.abs(camera.x) + ROOM_CLEARANCE)),
+    );
+    const depth = roundUp(
+      Math.max(MIN_ROOM_DEPTH, D / 2 + WALL_GAP + camera.z + ROOM_CLEARANCE),
+    );
+
+    const size = this.room?.userData;
+    if (!size || size.width !== width || size.depth !== depth) {
+      this.disposeRoom();
+      this.room = createRoom(this.materials, width, depth);
+      this.materials.floor.map.repeat.set(width, depth);
+      this.scene.add(this.room);
+      this.updateSunShadow(width, depth);
+    }
+    this.room.position.z = -D / 2 - WALL_GAP;
+    this.room.userData.lamp.position.z = (D + WALL_GAP + depth) / 2;
+  }
+
+  updateSunShadow(width, depth) {
+    const extent = Math.hypot(width, depth, ROOM_HEIGHT) / 2 + 0.5;
+    const camera = this.sun.shadow.camera;
+    camera.left = -extent;
+    camera.right = extent;
+    camera.top = extent;
+    camera.bottom = -extent;
+    camera.near = 0.5;
+    camera.far = SUN_DISTANCE + extent * 2;
+    camera.updateProjectionMatrix();
+  }
+
+  disposeRoom() {
+    if (!this.room) return;
+    this.room.userData.lampLight.dispose();
+    this.removeObject(this.room);
+    this.room = null;
+  }
+
   applyDaylight() {
+    if (!this.room) return;
     const light = getDaylight(this.timeOfDay);
     const center = new THREE.Vector3(
       0,
       ROOM_HEIGHT / 2,
-      this.room.position.z + ROOM_DEPTH / 2,
+      this.room.position.z + this.room.userData.depth / 2,
     );
 
     this.sun.position.copy(center).addScaledVector(light.direction, SUN_DISTANCE);
@@ -226,11 +270,14 @@ export class SceneManager {
     this.sun.target.updateMatrixWorld();
     this.sun.color.copy(light.sunColor);
     this.sun.intensity = light.sunIntensity;
+    this.sun.shadow.autoUpdate = light.sunIntensity > 0;
 
     this.scene.background.copy(light.skyColor);
     this.scene.environmentIntensity = light.environmentIntensity;
     this.ambientLight.intensity = light.ambientIntensity;
-    this.room.userData.lampLight.intensity = light.lampIntensity;
+    const lamp = this.room.userData.lampLight;
+    lamp.intensity = light.lampIntensity;
+    lamp.shadow.autoUpdate = light.lampIntensity > 0;
     this.materials.bulb.emissiveIntensity = light.lampIntensity * 0.6;
     this.renderer.toneMappingExposure = light.exposure;
   }
@@ -335,7 +382,7 @@ export class SceneManager {
     return { W: width * MM, H: height * MM, D: depth * MM };
   }
 
-  getFitDistance(direction, target) {
+  getFitDistance(direction, target, includeDoors = true) {
     const { W, H, D } = this.getSize();
     const m = DIMENSION_MARGIN;
     const radius = Math.sqrt(W * W + H * H + D * D) / 2 + m;
@@ -354,7 +401,8 @@ export class SceneManager {
       }
     }
 
-    for (const pivot of this.cabinet?.userData.doors ?? []) {
+    const doors = includeDoors ? (this.cabinet?.userData.doors ?? []) : [];
+    for (const pivot of doors) {
       const { angle = 0, hingeX, sign, width } = pivot.userData;
       if (angle <= 0) continue;
       const edgeX = hingeX - sign * width * Math.cos(angle);
@@ -382,11 +430,16 @@ export class SceneManager {
     const { H } = this.getSize();
     const target = new THREE.Vector3(0, H / 2, 0);
 
-    const direction = this.hasCameraView
+    const preferred = this.hasCameraView
       ? this.camera.position.clone().sub(this.controls.target).normalize()
-      : DEFAULT_VIEW_DIRECTION.clone();
+      : DEFAULT_VIEW_DIRECTION;
+    const zoom = this.hasCameraView ? 1 : DEFAULT_ZOOM_OUT;
     const currentDistance = this.camera.position.distanceTo(this.controls.target);
-    const { radius, distance } = this.getFitDistance(direction, target);
+    const { direction, radius, distance } = this.getCeilingSafeView(
+      preferred,
+      target,
+      zoom,
+    );
 
     this.controls.minDistance = Math.min(radius * 1.1, distance);
     this.controls.maxDistance = Math.max(distance * 1.6, radius * 2);
@@ -398,10 +451,25 @@ export class SceneManager {
     }
 
     this.controls.target.copy(target);
-    const zoom = this.hasCameraView ? 1 : DEFAULT_ZOOM_OUT;
     this.camera.position.copy(target).addScaledVector(direction, distance * zoom);
     this.hasCameraView = true;
     this.controls.update();
+  }
+
+  getCeilingSafeView(preferred, target, zoom = 1, includeDoors = true) {
+    let direction = preferred.clone();
+    let fit = this.getFitDistance(direction, target, includeDoors);
+    const maxRise = ROOM_HEIGHT - CEILING_CLEARANCE - target.y;
+
+    if (direction.y * fit.distance * zoom > maxRise) {
+      const y = THREE.MathUtils.clamp(maxRise / (fit.distance * zoom), -0.2, 1);
+      direction = new THREE.Vector3(direction.x, 0, direction.z)
+        .normalize()
+        .multiplyScalar(Math.sqrt(1 - y * y))
+        .setY(y);
+      fit = this.getFitDistance(direction, target, includeDoors);
+    }
+    return { direction, ...fit };
   }
 
   getFloorLimit() {
@@ -420,21 +488,17 @@ export class SceneManager {
     const offset = this.cameraOffset.copy(this.camera.position).sub(target);
     let scale = 1;
 
-    if (this.dimensions) {
+    if (this.room) {
       const backZ = this.room.position.z;
+      const { width, depth } = this.room.userData;
       const limit = (origin, delta, min, max) => {
         if (delta < 0 && origin + delta < min) return (min - origin) / delta;
         if (delta > 0 && origin + delta > max) return (max - origin) / delta;
         return 1;
       };
       scale = Math.min(
-        limit(
-          target.x,
-          offset.x,
-          -ROOM_WIDTH / 2 + WALL_MARGIN,
-          ROOM_WIDTH / 2 - WALL_MARGIN,
-        ),
-        limit(target.z, offset.z, backZ + WALL_MARGIN, backZ + ROOM_DEPTH - WALL_MARGIN),
+        limit(target.x, offset.x, -width / 2 + WALL_MARGIN, width / 2 - WALL_MARGIN),
+        limit(target.z, offset.z, backZ + WALL_MARGIN, backZ + depth - WALL_MARGIN),
         limit(target.y, offset.y, this.getFloorLimit(), ROOM_HEIGHT - WALL_MARGIN),
       );
     }
@@ -500,8 +564,7 @@ export class SceneManager {
 
     this.removeObject(this.cabinet);
     this.removeObject(this.dimensionLines);
-    this.room.userData.lampLight.dispose();
-    this.removeObject(this.room);
+    this.disposeRoom();
     this.materials.dispose();
     this.environmentMap.dispose();
     this.sun.dispose();

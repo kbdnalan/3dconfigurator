@@ -11,6 +11,7 @@ export default function ControlPanel({
   onDimensionChange,
   onMaterialChange,
   onTimeOfDayChange,
+  onTimeOfDayPreset,
   onDimensionsVisibleChange,
 }) {
   return (
@@ -41,7 +42,11 @@ export default function ControlPanel({
         <h2 id="light-title" className="panel-title">
           Освещение
         </h2>
-        <TimeOfDayField value={timeOfDay} onChange={onTimeOfDayChange} />
+        <TimeOfDayField
+          value={timeOfDay}
+          onChange={onTimeOfDayChange}
+          onPreset={onTimeOfDayPreset}
+        />
         <label className="switch">
           <input
             type="checkbox"
