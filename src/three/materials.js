@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { MATERIALS } from '../config.js';
 import { createWoodTexture } from './woodTexture.js';
 import { createParquetTexture } from './parquetTexture.js';
-import { ROOM_SIZE } from './createRoom.js';
+import { ROOM_DEPTH, ROOM_WIDTH } from './createRoom.js';
 
 const ROUGHNESS = {
   white: 0.78,
@@ -17,7 +17,7 @@ export function createMaterials(maxAnisotropy = 1) {
 
   const parquetTexture = createParquetTexture();
   parquetTexture.anisotropy = Math.min(16, maxAnisotropy);
-  parquetTexture.repeat.set(ROOM_SIZE * 2, ROOM_SIZE * 2);
+  parquetTexture.repeat.set(ROOM_WIDTH, ROOM_DEPTH);
 
   const body = {};
   MATERIALS.forEach(({ key, color }) => {
@@ -53,18 +53,65 @@ export function createMaterials(maxAnisotropy = 1) {
     metalness: 0,
   });
 
+  const frame = new THREE.MeshStandardMaterial({
+    color: '#f7f7f5',
+    roughness: 0.35,
+    metalness: 0,
+  });
+
+  const ceiling = new THREE.MeshStandardMaterial({
+    color: '#f3f2ef',
+    roughness: 0.95,
+    metalness: 0,
+  });
+
+  const lampShade = new THREE.MeshStandardMaterial({
+    color: '#26282b',
+    roughness: 0.45,
+    metalness: 0.6,
+    side: THREE.DoubleSide,
+  });
+
+  const bulb = new THREE.MeshStandardMaterial({
+    color: '#fff6e8',
+    emissive: '#ffc98a',
+    emissiveIntensity: 0,
+  });
+
   const dimensionLine = new THREE.LineBasicMaterial({
-    color: '#3a3e44',
+    color: '#2b2e33',
     transparent: true,
-    opacity: 0.85,
+    opacity: 0.9,
   });
 
   function dispose() {
     Object.values(body).forEach((material) => material.dispose());
-    [handle, floor, wall, baseboard, dimensionLine].forEach((m) => m.dispose());
+    [
+      handle,
+      floor,
+      wall,
+      baseboard,
+      frame,
+      ceiling,
+      lampShade,
+      bulb,
+      dimensionLine,
+    ].forEach((m) => m.dispose());
     woodTexture.dispose();
     parquetTexture.dispose();
   }
 
-  return { body, handle, floor, wall, baseboard, dimensionLine, dispose };
+  return {
+    body,
+    handle,
+    floor,
+    wall,
+    baseboard,
+    frame,
+    ceiling,
+    lampShade,
+    bulb,
+    dimensionLine,
+    dispose,
+  };
 }

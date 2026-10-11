@@ -8,6 +8,12 @@ const BACK = 6 * MM;
 const DOOR = 18 * MM;
 const DOOR_REVEAL = 2 * MM;
 const DOOR_CLEARANCE = 1 * MM;
+const DOORS_CENTER_GAP = 3 * MM;
+const PLINTH_HEIGHT = 80 * MM;
+const PLINTH_INSET = 40 * MM;
+const SHELF_SETBACK = 20 * MM;
+const SHELF_STEP = 380 * MM;
+const DOUBLE_DOOR_FROM_WIDTH = 800;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -25,7 +31,7 @@ function createPanel(name, size, position, material, rounded = false) {
   return mesh;
 }
 
-function createHandle(doorWidth, doorHeight, material) {
+function createHandle(doorWidth, doorHeight, side, material) {
   const group = new THREE.Group();
   group.name = 'handle';
 
@@ -56,13 +62,37 @@ function createHandle(doorWidth, doorHeight, material) {
   });
 
   const sideInset = clamp(doorWidth * 0.08, 35 * MM, 60 * MM);
-  const topInset = clamp(doorHeight * 0.08, 40 * MM, 100 * MM);
-  group.position.set(
-    doorWidth / 2 - sideInset,
-    doorHeight / 2 - topInset - length / 2,
-    DOOR / 2,
-  );
+  group.position.set(side * (doorWidth / 2 - sideInset), 0, DOOR / 2);
   return group;
+}
+
+function createDoor({
+  key,
+  hingeX,
+  sign,
+  width,
+  height,
+  centerY,
+  frontZ,
+  materials,
+  body,
+}) {
+  const pivot = new THREE.Group();
+  pivot.name = `door-pivot-${key}`;
+  pivot.position.set(hingeX, 0, frontZ - DOOR);
+
+  const door = createPanel(
+    `door-${key}`,
+    [width, height, DOOR],
+    [(-sign * width) / 2, centerY, DOOR / 2],
+    body,
+    true,
+  );
+  door.add(createHandle(width, height, -sign, materials.handle));
+  pivot.add(door);
+
+  pivot.userData = { key, sign, hingeX, width };
+  return pivot;
 }
 
 export function createCabinet(dimensions, materials, materialKey) {
@@ -73,8 +103,12 @@ export function createCabinet(dimensions, materials, materialKey) {
 
   const carcassDepth = D - DOOR - DOOR_CLEARANCE;
   const backZ = -D / 2;
+  const carcassFrontZ = backZ + carcassDepth;
   const carcassCenterZ = backZ + carcassDepth / 2;
   const innerWidth = W - 2 * PANEL;
+  const innerBottom = PLINTH_HEIGHT + PANEL;
+  const innerTop = H - PANEL;
+  const innerHeight = innerTop - innerBottom;
 
   const cabinet = new THREE.Group();
   cabinet.name = 'cabinet';
@@ -111,40 +145,86 @@ export function createCabinet(dimensions, materials, materialKey) {
     createPanel(
       'bottom',
       [innerWidth, PANEL, carcassDepth],
-      [0, PANEL / 2, carcassCenterZ],
+      [0, PLINTH_HEIGHT + PANEL / 2, carcassCenterZ],
       body,
     ),
   );
 
-  const backHeight = H - 2 * PANEL;
+  cabinet.add(
+    createPanel(
+      'plinth',
+      [innerWidth, PLINTH_HEIGHT, PANEL],
+      [0, PLINTH_HEIGHT / 2, carcassFrontZ - PLINTH_INSET - PANEL / 2],
+      body,
+    ),
+  );
+
   cabinet.add(
     createPanel(
       'back',
-      [innerWidth, backHeight, BACK],
-      [0, PANEL + backHeight / 2, backZ + BACK / 2],
+      [innerWidth, innerHeight, BACK],
+      [0, innerBottom + innerHeight / 2, backZ + BACK / 2],
       body,
     ),
   );
 
-  const doorWidth = W - 2 * DOOR_REVEAL;
-  const doorHeight = H - 2 * DOOR_REVEAL;
+  const shelfCount = Math.max(0, Math.round(innerHeight / SHELF_STEP) - 1);
+  const shelfDepth = carcassDepth - BACK - SHELF_SETBACK;
+  for (let i = 1; i <= shelfCount; i += 1) {
+    cabinet.add(
+      createPanel(
+        `shelf-${i}`,
+        [innerWidth, PANEL, shelfDepth],
+        [
+          0,
+          innerBottom + (innerHeight * i) / (shelfCount + 1),
+          backZ + BACK + shelfDepth / 2,
+        ],
+        body,
+      ),
+    );
+  }
 
-  const doorPivot = new THREE.Group();
-  doorPivot.name = 'door-pivot';
-  doorPivot.position.set(-doorWidth / 2, 0, D / 2 - DOOR);
-
-  const door = createPanel(
-    'door',
-    [doorWidth, doorHeight, DOOR],
-    [doorWidth / 2, H / 2, DOOR / 2],
+  const doorHeight = H - PLINTH_HEIGHT - 2 * DOOR_REVEAL;
+  const doorCenterY = PLINTH_HEIGHT + DOOR_REVEAL + doorHeight / 2;
+  const common = {
+    height: doorHeight,
+    centerY: doorCenterY,
+    frontZ: D / 2,
+    materials,
     body,
-    true,
-  );
-  door.add(createHandle(doorWidth, doorHeight, materials.handle));
-  doorPivot.add(door);
-  cabinet.add(doorPivot);
+  };
 
-  cabinet.userData.doorPivot = doorPivot;
+  const doors =
+    dimensions.width >= DOUBLE_DOOR_FROM_WIDTH
+      ? [
+          createDoor({
+            ...common,
+            key: 'left',
+            hingeX: -W / 2 + DOOR_REVEAL,
+            sign: -1,
+            width: (W - 2 * DOOR_REVEAL - DOORS_CENTER_GAP) / 2,
+          }),
+          createDoor({
+            ...common,
+            key: 'right',
+            hingeX: W / 2 - DOOR_REVEAL,
+            sign: 1,
+            width: (W - 2 * DOOR_REVEAL - DOORS_CENTER_GAP) / 2,
+          }),
+        ]
+      : [
+          createDoor({
+            ...common,
+            key: 'left',
+            hingeX: -W / 2 + DOOR_REVEAL,
+            sign: -1,
+            width: W - 2 * DOOR_REVEAL,
+          }),
+        ];
+
+  doors.forEach((pivot) => cabinet.add(pivot));
+  cabinet.userData.doors = doors;
 
   return cabinet;
 }

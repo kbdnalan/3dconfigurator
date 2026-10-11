@@ -2,10 +2,14 @@ import { useState } from 'react';
 import { DIMENSION_LIMITS } from '../config.js';
 import { clampDimension, validateDimension } from '../utils/validation.js';
 
+const SLIDER_STEP = 10;
+
 export default function DimensionField({ id, label, value, onChange }) {
   const [text, setText] = useState(String(value));
   const [error, setError] = useState(null);
   const errorId = `${id}-error`;
+  const { min, max } = DIMENSION_LIMITS;
+  const fill = ((value - min) / (max - min)) * 100;
 
   function handleTextChange(event) {
     const nextText = event.target.value;
@@ -29,6 +33,13 @@ export default function DimensionField({ id, label, value, onChange }) {
       setText(String(value));
     }
     setError(null);
+  }
+
+  function handleSliderChange(event) {
+    const nextValue = Number(event.target.value);
+    setText(String(nextValue));
+    setError(null);
+    onChange(nextValue);
   }
 
   return (
@@ -55,8 +66,25 @@ export default function DimensionField({ id, label, value, onChange }) {
         </div>
       </div>
 
+      <input
+        className="field-slider"
+        type="range"
+        min={min}
+        max={max}
+        step={SLIDER_STEP}
+        value={value}
+        onChange={handleSliderChange}
+        style={{ '--fill': `${fill}%` }}
+        aria-label={`${label}, мм`}
+      />
+
       <p id={errorId} className="field-message" aria-live="polite">
-        {error ?? `от ${DIMENSION_LIMITS.min} до ${DIMENSION_LIMITS.max} мм`}
+        {error ?? (
+          <>
+            <span>{min} мм</span>
+            <span>{max} мм</span>
+          </>
+        )}
       </p>
     </div>
   );

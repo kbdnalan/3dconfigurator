@@ -9,12 +9,23 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createMaterials } from './materials.js';
 import { createCabinet, MM } from './createCabinet.js';
 import { createDimensions } from './createDimensions.js';
-import { createRoom } from './createRoom.js';
+import {
+  createRoom,
+  ROOM_DEPTH,
+  ROOM_HEIGHT,
+  ROOM_WIDTH,
+  WALL_GAP,
+} from './createRoom.js';
+import { getDaylight } from './daylight.js';
 
-const BACKGROUND = '#e7e3dd';
-const DEFAULT_VIEW_DIRECTION = new THREE.Vector3(0.9, 0.62, 1.55).normalize();
-const LIGHT_DIRECTION = new THREE.Vector3(1, 1.25, 0.65).normalize();
+const DEFAULT_VIEW_DIRECTION = new THREE.Vector3(1.15, 0.55, 1).normalize();
+const DEFAULT_ZOOM_OUT = 1.3;
 const DIMENSION_MARGIN = 0.16;
+const WALL_MARGIN = 0.1;
+const FLOOR_MARGIN = 0.12;
+const MAX_BELOW_CENTER_ANGLE = THREE.MathUtils.degToRad(20);
+const SUN_DISTANCE = 12;
+const SHADOW_EXTENT = 4;
 const DOOR_OPEN_ANGLE = THREE.MathUtils.degToRad(100);
 const DOOR_DURATION = 600;
 const CLICK_TOLERANCE = 5;
@@ -35,11 +46,10 @@ export class SceneManager {
     this.materialKey = 'white';
     this.cabinet = null;
     this.dimensionLines = null;
-    this.room = null;
+    this.dimensionsVisible = true;
+    this.timeOfDay = 15;
     this.hasCameraView = false;
-    this.doorTarget = 0;
-    this.doorProgress = 0;
-    this.doorAngle = 0;
+    this.doorStates = new Map();
     this.lastFrameTime = null;
 
     this.initRenderer();
@@ -49,6 +59,8 @@ export class SceneManager {
     this.initPostprocessing();
     this.initDoorClick();
     this.materials = createMaterials(this.renderer.capabilities.getMaxAnisotropy());
+    this.room = createRoom(this.materials);
+    this.scene.add(this.room);
 
     this.resizeObserver = new ResizeObserver(this.handleResize);
     this.resizeObserver.observe(container);
@@ -57,12 +69,11 @@ export class SceneManager {
 
   initRenderer() {
     const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.NeutralToneMapping;
-    renderer.toneMappingExposure = 1;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer = renderer;
     this.container.appendChild(renderer.domElement);
 
@@ -73,8 +84,7 @@ export class SceneManager {
 
   initScene() {
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(BACKGROUND);
-    scene.fog = new THREE.Fog(BACKGROUND, 20, 45);
+    scene.background = new THREE.Color();
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     const roomEnvironment = new RoomEnvironment();
@@ -82,13 +92,14 @@ export class SceneManager {
     roomEnvironment.dispose();
     pmrem.dispose();
     scene.environment = this.environmentMap;
-    scene.environmentIntensity = 0.4;
 
     this.scene = scene;
   }
 
   initCamera() {
-    this.camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+    this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 50);
+    this.viewCamera = this.camera.clone();
+    this.cameraOffset = new THREE.Vector3();
 
     const controls = new OrbitControls(this.camera, this.renderer.domElement);
     controls.enableDamping = true;
@@ -97,23 +108,32 @@ export class SceneManager {
     controls.rotateSpeed = 0.8;
     controls.zoomSpeed = 0.9;
     controls.minPolarAngle = 0.15;
-    controls.maxPolarAngle = Math.PI / 2 - 0.04;
+    controls.minAzimuthAngle = -Math.PI / 2;
+    controls.maxAzimuthAngle = Math.PI / 2;
     controls.addEventListener('change', this.requestRender);
     this.controls = controls;
   }
 
   initLights() {
-    this.hemiLight = new THREE.HemisphereLight('#f2f2f0', '#b3a693', 0.35);
-    this.scene.add(this.hemiLight);
+    this.ambientLight = new THREE.HemisphereLight('#f4f1ec', '#b3a693', 0.3);
+    this.scene.add(this.ambientLight);
 
-    const keyLight = new THREE.DirectionalLight('#fff7ee', 3.2);
-    keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(2048, 2048);
-    keyLight.shadow.bias = -0.0004;
-    keyLight.shadow.normalBias = 0.02;
-    this.scene.add(keyLight);
-    this.scene.add(keyLight.target);
-    this.keyLight = keyLight;
+    const sun = new THREE.DirectionalLight('#ffffff', 1);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.radius = 3;
+    sun.shadow.bias = -0.0003;
+    sun.shadow.normalBias = 0.03;
+    const shadowCamera = sun.shadow.camera;
+    shadowCamera.left = -SHADOW_EXTENT;
+    shadowCamera.right = SHADOW_EXTENT;
+    shadowCamera.top = SHADOW_EXTENT;
+    shadowCamera.bottom = -SHADOW_EXTENT;
+    shadowCamera.near = 0.5;
+    shadowCamera.far = SUN_DISTANCE + SHADOW_EXTENT * 2;
+    shadowCamera.updateProjectionMatrix();
+    this.scene.add(sun, sun.target);
+    this.sun = sun;
   }
 
   initPostprocessing() {
@@ -122,19 +142,18 @@ export class SceneManager {
       samples: 4,
     });
     this.composer = new EffectComposer(this.renderer, renderTarget);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer.addPass(new RenderPass(this.scene, this.viewCamera));
 
-    this.aoPass = new GTAOPass(this.scene, this.camera, 1, 1);
+    this.aoPass = new GTAOPass(this.scene, this.viewCamera, 1, 1);
     this.aoPass.output = GTAOPass.OUTPUT.Default;
-    this.aoPass.blendIntensity = 1;
     this.aoPass.updateGtaoMaterial({
       radius: 0.25,
       distanceExponent: 1,
       thickness: 1,
       scale: 1,
-      samples: 16,
+      samples: 12,
     });
-    this.aoPass.updatePdMaterial({ radius: 6, rings: 2, samples: 16 });
+    this.aoPass.updatePdMaterial({ radius: 6, rings: 2, samples: 12 });
     this.composer.addPass(this.aoPass);
 
     this.outputPass = new OutputPass();
@@ -147,15 +166,23 @@ export class SceneManager {
 
     this.removeObject(this.cabinet);
     this.removeObject(this.dimensionLines);
-    this.removeObject(this.room);
 
     this.cabinet = createCabinet(this.dimensions, this.materials, this.materialKey);
     this.dimensionLines = createDimensions(this.dimensions, this.materials.dimensionLine);
-    this.room = createRoom(this.dimensions, this.materials);
-    this.scene.add(this.room, this.cabinet, this.dimensionLines);
-    this.applyDoorAngle();
+    this.dimensionLines.visible = this.dimensionsVisible;
+    this.scene.add(this.cabinet, this.dimensionLines);
 
-    this.updateShadowCamera();
+    const previousStates = this.doorStates;
+    this.doorStates = new Map(
+      this.cabinet.userData.doors.map(({ userData: { key } }) => [
+        key,
+        previousStates.get(key) ?? { target: 0, progress: 0 },
+      ]),
+    );
+    this.applyDoorAngles();
+
+    this.room.position.z = -this.getSize().D / 2 - WALL_GAP;
+    this.applyDaylight();
     this.fitCamera();
     this.requestRender();
   }
@@ -172,6 +199,42 @@ export class SceneManager {
     this.requestRender();
   }
 
+  setTimeOfDay(hours) {
+    if (this.disposed) return;
+    this.timeOfDay = hours;
+    this.applyDaylight();
+    this.requestRender();
+  }
+
+  setDimensionsVisible(visible) {
+    if (this.disposed) return;
+    this.dimensionsVisible = visible;
+    if (this.dimensionLines) this.dimensionLines.visible = visible;
+    this.requestRender();
+  }
+
+  applyDaylight() {
+    const light = getDaylight(this.timeOfDay);
+    const center = new THREE.Vector3(
+      0,
+      ROOM_HEIGHT / 2,
+      this.room.position.z + ROOM_DEPTH / 2,
+    );
+
+    this.sun.position.copy(center).addScaledVector(light.direction, SUN_DISTANCE);
+    this.sun.target.position.copy(center);
+    this.sun.target.updateMatrixWorld();
+    this.sun.color.copy(light.sunColor);
+    this.sun.intensity = light.sunIntensity;
+
+    this.scene.background.copy(light.skyColor);
+    this.scene.environmentIntensity = light.environmentIntensity;
+    this.ambientLight.intensity = light.ambientIntensity;
+    this.room.userData.lampLight.intensity = light.lampIntensity;
+    this.materials.bulb.emissiveIntensity = light.lampIntensity * 0.6;
+    this.renderer.toneMappingExposure = light.exposure;
+  }
+
   initDoorClick() {
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -183,24 +246,24 @@ export class SceneManager {
     canvas.addEventListener('pointermove', this.handlePointerMove);
   }
 
-  isPointerOverDoor(event) {
-    const pivot = this.cabinet?.userData.doorPivot;
-    if (!pivot) return false;
+  getDoorUnderPointer(event) {
+    const doors = this.cabinet?.userData.doors;
+    if (!doors) return null;
 
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set(
       ((event.clientX - rect.left) / rect.width) * 2 - 1,
       -((event.clientY - rect.top) / rect.height) * 2 + 1,
     );
-    this.raycaster.setFromCamera(this.pointer, this.camera);
+    this.raycaster.setFromCamera(this.pointer, this.viewCamera);
 
     const [hit] = this.raycaster.intersectObject(this.cabinet, true);
-    if (!hit) return false;
+    if (!hit) return null;
 
     for (let object = hit.object; object; object = object.parent) {
-      if (object === pivot) return true;
+      if (doors.includes(object)) return object;
     }
-    return false;
+    return null;
   }
 
   handlePointerDown = (event) => {
@@ -217,43 +280,54 @@ export class SceneManager {
     const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
     if (moved > CLICK_TOLERANCE) return;
 
-    if (this.isPointerOverDoor(event)) this.toggleDoor();
+    const door = this.getDoorUnderPointer(event);
+    if (door) this.toggleDoor(door.userData.key);
   };
 
   handlePointerMove = (event) => {
     if (event.pointerType !== 'mouse' || event.buttons !== 0) return;
-    this.renderer.domElement.style.cursor = this.isPointerOverDoor(event)
+    this.renderer.domElement.style.cursor = this.getDoorUnderPointer(event)
       ? 'pointer'
       : '';
   };
 
-  toggleDoor() {
-    this.doorTarget = this.doorTarget === 1 ? 0 : 1;
+  toggleDoor(key) {
+    const state = this.doorStates.get(key);
+    if (!state) return;
+    state.target = state.target === 1 ? 0 : 1;
     this.requestRender();
   }
 
-  updateDoor(now) {
-    if (this.doorProgress === this.doorTarget) return false;
-
+  updateDoors(now) {
     const delta = this.lastFrameTime === null ? 16 : now - this.lastFrameTime;
     const step = delta / DOOR_DURATION;
-    this.doorProgress =
-      this.doorTarget > this.doorProgress
-        ? Math.min(this.doorTarget, this.doorProgress + step)
-        : Math.max(this.doorTarget, this.doorProgress - step);
+    let changed = false;
+    let moving = false;
 
-    this.applyDoorAngle();
+    for (const state of this.doorStates.values()) {
+      if (state.progress === state.target) continue;
+      state.progress =
+        state.target > state.progress
+          ? Math.min(state.target, state.progress + step)
+          : Math.max(state.target, state.progress - step);
+      changed = true;
+      if (state.progress !== state.target) moving = true;
+    }
+
+    if (!changed) return false;
+    this.applyDoorAngles();
     this.fitCamera({ onlyIfCut: true });
-    return this.doorProgress !== this.doorTarget;
+    return moving;
   }
 
-  applyDoorAngle() {
-    const pivot = this.cabinet?.userData.doorPivot;
-    if (!pivot) return;
-    const t = this.doorProgress;
-    const eased = t * t * (3 - 2 * t);
-    this.doorAngle = eased * DOOR_OPEN_ANGLE;
-    pivot.rotation.y = -this.doorAngle;
+  applyDoorAngles() {
+    for (const pivot of this.cabinet?.userData.doors ?? []) {
+      const { key, sign } = pivot.userData;
+      const t = this.doorStates.get(key)?.progress ?? 0;
+      const eased = t * t * (3 - 2 * t);
+      pivot.userData.angle = eased * DOOR_OPEN_ANGLE;
+      pivot.rotation.y = sign * pivot.userData.angle;
+    }
   }
 
   getSize() {
@@ -280,10 +354,14 @@ export class SceneManager {
       }
     }
 
-    if (this.doorAngle > 0) {
-      const edgeX = -W / 2 + W * Math.cos(this.doorAngle) - 0.05;
-      const edgeZ = D / 2 + W * Math.sin(this.doorAngle) + 0.05;
-      points.push(new THREE.Vector3(edgeX, 0, edgeZ), new THREE.Vector3(edgeX, H, edgeZ));
+    for (const pivot of this.cabinet?.userData.doors ?? []) {
+      const { angle = 0, hingeX, sign, width } = pivot.userData;
+      if (angle <= 0) continue;
+      const edgeX = hingeX - sign * width * Math.cos(angle);
+      const edgeZ = D / 2 + width * Math.sin(angle) + 0.05;
+      for (const x of [edgeX - 0.05, edgeX + 0.05]) {
+        points.push(new THREE.Vector3(x, 0, edgeZ), new THREE.Vector3(x, H, edgeZ));
+      }
     }
 
     let distance = 0;
@@ -311,7 +389,8 @@ export class SceneManager {
     const { radius, distance } = this.getFitDistance(direction, target);
 
     this.controls.minDistance = Math.min(radius * 1.1, distance);
-    this.controls.maxDistance = Math.max(distance * 2.2, radius * 3);
+    this.controls.maxDistance = Math.max(distance * 1.6, radius * 2);
+    this.updateFloorLimit(distance);
 
     if (onlyIfCut && this.hasCameraView && currentDistance >= distance) {
       this.controls.update();
@@ -319,27 +398,50 @@ export class SceneManager {
     }
 
     this.controls.target.copy(target);
-    this.camera.position.copy(target).addScaledVector(direction, distance);
+    const zoom = this.hasCameraView ? 1 : DEFAULT_ZOOM_OUT;
+    this.camera.position.copy(target).addScaledVector(direction, distance * zoom);
     this.hasCameraView = true;
     this.controls.update();
   }
 
-  updateShadowCamera() {
-    const { W, H, D } = this.getSize();
-    const extent = Math.max(W, D) + H + 0.3;
-    const lightDistance = Math.max(W, H, D) * 2 + 3;
+  getFloorLimit() {
+    return Math.min(FLOOR_MARGIN, this.getSize().H / 4);
+  }
 
-    this.keyLight.target.position.set(0, 0, 0);
-    this.keyLight.position.copy(LIGHT_DIRECTION).multiplyScalar(lightDistance);
+  updateFloorLimit(fitDistance) {
+    const { H } = this.getSize();
+    const belowCenter = Math.atan2(H / 2 - this.getFloorLimit(), fitDistance * 0.8);
+    this.controls.maxPolarAngle =
+      Math.PI / 2 + Math.min(Math.max(belowCenter, 0), MAX_BELOW_CENTER_ANGLE);
+  }
 
-    const shadowCamera = this.keyLight.shadow.camera;
-    shadowCamera.left = -extent;
-    shadowCamera.right = extent;
-    shadowCamera.top = extent;
-    shadowCamera.bottom = -extent;
-    shadowCamera.near = 0.1;
-    shadowCamera.far = lightDistance + extent * 2;
-    shadowCamera.updateProjectionMatrix();
+  updateViewCamera() {
+    const target = this.controls.target;
+    const offset = this.cameraOffset.copy(this.camera.position).sub(target);
+    let scale = 1;
+
+    if (this.dimensions) {
+      const backZ = this.room.position.z;
+      const limit = (origin, delta, min, max) => {
+        if (delta < 0 && origin + delta < min) return (min - origin) / delta;
+        if (delta > 0 && origin + delta > max) return (max - origin) / delta;
+        return 1;
+      };
+      scale = Math.min(
+        limit(
+          target.x,
+          offset.x,
+          -ROOM_WIDTH / 2 + WALL_MARGIN,
+          ROOM_WIDTH / 2 - WALL_MARGIN,
+        ),
+        limit(target.z, offset.z, backZ + WALL_MARGIN, backZ + ROOM_DEPTH - WALL_MARGIN),
+        limit(target.y, offset.y, this.getFloorLimit(), ROOM_HEIGHT - WALL_MARGIN),
+      );
+    }
+
+    this.viewCamera.position.copy(target).addScaledVector(offset, Math.max(scale, 0));
+    this.viewCamera.quaternion.copy(this.camera.quaternion);
+    this.viewCamera.updateMatrixWorld();
   }
 
   handleResize = () => {
@@ -351,19 +453,13 @@ export class SceneManager {
     this.renderer.setSize(width, height, false);
     this.composer.setSize(width, height);
     this.labelRenderer.setSize(width, height);
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
+    for (const camera of [this.camera, this.viewCamera]) {
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    }
     this.fitCamera({ onlyIfCut: true });
     this.requestRender();
   };
-
-  updateWallVisibility() {
-    if (!this.room) return;
-    const { backSide, leftSide, backZ, leftX } = this.room.userData;
-    const { x, z } = this.camera.position;
-    backSide.visible = z > backZ;
-    leftSide.visible = x > leftX;
-  }
 
   requestRender = () => {
     if (this.disposed || this.frameId !== null) return;
@@ -372,13 +468,13 @@ export class SceneManager {
 
   renderFrame = (now) => {
     this.frameId = null;
-    const doorMoving = this.updateDoor(now);
+    const doorMoving = this.updateDoors(now);
     this.lastFrameTime = doorMoving ? now : null;
 
     this.controls.update();
-    this.updateWallVisibility();
+    this.updateViewCamera();
     this.composer.render();
-    this.labelRenderer.render(this.scene, this.camera);
+    this.labelRenderer.render(this.scene, this.viewCamera);
 
     if (doorMoving) this.requestRender();
   };
@@ -404,11 +500,12 @@ export class SceneManager {
 
     this.removeObject(this.cabinet);
     this.removeObject(this.dimensionLines);
+    this.room.userData.lampLight.dispose();
     this.removeObject(this.room);
     this.materials.dispose();
     this.environmentMap.dispose();
-    this.keyLight.dispose();
-    this.hemiLight.dispose();
+    this.sun.dispose();
+    this.ambientLight.dispose();
     this.scene.clear();
 
     this.aoPass.dispose();

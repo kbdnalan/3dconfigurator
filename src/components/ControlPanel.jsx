@@ -1,12 +1,17 @@
 import { DIMENSION_FIELDS } from '../config.js';
 import DimensionField from './DimensionField.jsx';
 import MaterialPicker from './MaterialPicker.jsx';
+import TimeOfDayField from './TimeOfDayField.jsx';
 
 export default function ControlPanel({
   dimensions,
   materialKey,
+  timeOfDay,
+  dimensionsVisible,
   onDimensionChange,
   onMaterialChange,
+  onTimeOfDayChange,
+  onDimensionsVisibleChange,
 }) {
   return (
     <div className="panel-inner">
@@ -30,6 +35,23 @@ export default function ControlPanel({
           Материал
         </h2>
         <MaterialPicker value={materialKey} onChange={onMaterialChange} />
+      </section>
+
+      <section className="panel-section" aria-labelledby="light-title">
+        <h2 id="light-title" className="panel-title">
+          Освещение
+        </h2>
+        <TimeOfDayField value={timeOfDay} onChange={onTimeOfDayChange} />
+        <label className="switch">
+          <input
+            type="checkbox"
+            role="switch"
+            checked={dimensionsVisible}
+            onChange={(event) => onDimensionsVisibleChange(event.target.checked)}
+          />
+          <span className="switch-track" aria-hidden="true" />
+          <span className="switch-label">Размерные линии</span>
+        </label>
       </section>
     </div>
   );

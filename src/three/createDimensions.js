@@ -7,10 +7,15 @@ const GAP = 10 * MM;
 const OVERSHOOT = 15 * MM;
 const TICK = 16 * MM;
 
-function createLabel(text, position) {
+function createLabel(axis, value, position) {
   const element = document.createElement('div');
   element.className = 'dim-label';
-  element.textContent = text;
+  const key = document.createElement('span');
+  key.className = 'dim-key';
+  key.textContent = axis;
+  const text = document.createElement('span');
+  text.textContent = `${value} мм`;
+  element.append(key, text);
   const label = new CSS2DObject(element);
   label.position.copy(position);
   return label;
@@ -57,7 +62,7 @@ export function createDimensions(dimensions, lineMaterial) {
     new THREE.Vector3(W / 2, H, D / 2),
     new THREE.Vector3(0, 1, 0),
   );
-  group.add(createLabel(`${dimensions.width} мм`, widthMid));
+  group.add(createLabel('Ш', dimensions.width, widthMid));
 
   const heightMid = addDimensionSegments(
     points,
@@ -65,7 +70,7 @@ export function createDimensions(dimensions, lineMaterial) {
     new THREE.Vector3(-W / 2, H, D / 2),
     new THREE.Vector3(-1, 0, 0),
   );
-  group.add(createLabel(`${dimensions.height} мм`, heightMid));
+  group.add(createLabel('В', dimensions.height, heightMid));
 
   const depthMid = addDimensionSegments(
     points,
@@ -73,7 +78,7 @@ export function createDimensions(dimensions, lineMaterial) {
     new THREE.Vector3(W / 2, H, -D / 2),
     new THREE.Vector3(1, 0, 0),
   );
-  group.add(createLabel(`${dimensions.depth} мм`, depthMid));
+  group.add(createLabel('Г', dimensions.depth, depthMid));
 
   const geometry = new THREE.BufferGeometry().setFromPoints(points);
   const lines = new THREE.LineSegments(geometry, lineMaterial);

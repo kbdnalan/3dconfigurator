@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { SceneManager } from '../three/SceneManager.js';
 
-export default function Viewer3D({ dimensions, materialKey }) {
+export default function Viewer3D({
+  dimensions,
+  materialKey,
+  timeOfDay,
+  dimensionsVisible,
+}) {
   const containerRef = useRef(null);
   const managerRef = useRef(null);
   const [webglError, setWebglError] = useState(false);
@@ -32,6 +37,14 @@ export default function Viewer3D({ dimensions, materialKey }) {
     managerRef.current?.setMaterial(materialKey);
   }, [materialKey]);
 
+  useEffect(() => {
+    managerRef.current?.setTimeOfDay(timeOfDay);
+  }, [timeOfDay]);
+
+  useEffect(() => {
+    managerRef.current?.setDimensionsVisible(dimensionsVisible);
+  }, [dimensionsVisible]);
+
   return (
     <div className="viewer">
       <div ref={containerRef} className="viewer-canvas" />
@@ -45,9 +58,7 @@ export default function Viewer3D({ dimensions, materialKey }) {
           <span className="hint-desktop">
             Перетаскивание — вращение · Колесо — масштаб · Клик по дверце — открыть
           </span>
-          <span className="hint-touch">
-            Палец — вращение · Щипок — масштаб · Касание дверцы — открыть
-          </span>
+          <span className="hint-touch">Вращайте пальцем · Нажмите на дверцу</span>
         </p>
       )}
     </div>

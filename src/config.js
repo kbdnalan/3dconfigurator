@@ -22,3 +22,10 @@ export const MATERIALS = [
 ];
 
 export const DEFAULT_MATERIAL = 'white';
+
+export const TIME_OF_DAY = {
+  min: 7,
+  max: 21,
+  step: 0.25,
+  initial: 15,
+};
