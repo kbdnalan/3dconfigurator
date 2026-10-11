@@ -1,6 +1,10 @@
 import {
+  CABINET_STYLES,
   DEFAULT_DIMENSIONS,
   DEFAULT_MATERIAL,
+  DEFAULT_ROD,
+  DEFAULT_SHELVES,
+  DEFAULT_STYLE,
   DIMENSION_LIMITS,
   MATERIALS,
   TIME_OF_DAY,
@@ -8,12 +12,15 @@ import {
 
 const STORAGE_KEY = 'cabinet-configurator:settings';
 const VERSION = 1;
+const MAX_PLACEMENT = 10;
 
 export const DEFAULT_SETTINGS = {
   dimensions: DEFAULT_DIMENSIONS,
+  construction: { style: DEFAULT_STYLE, shelves: DEFAULT_SHELVES, rod: DEFAULT_ROD },
   materialKey: DEFAULT_MATERIAL,
   timeOfDay: TIME_OF_DAY.initial,
   dimensionsVisible: true,
+  placement: { x: 0, z: 0 },
 };
 
 function isNumberInRange(value, min, max) {
@@ -29,6 +36,24 @@ function readDimension(saved, key) {
     : DEFAULT_DIMENSIONS[key];
 }
 
+function readConstruction(saved) {
+  const style = CABINET_STYLES.some((item) => item.key === saved?.construction?.style)
+    ? saved.construction.style
+    : DEFAULT_STYLE;
+  const shelves = isNumberInRange(saved?.construction?.shelves, 0, 20)
+    ? Math.round(saved.construction.shelves)
+    : DEFAULT_SHELVES;
+  const rod =
+    typeof saved?.construction?.rod === 'boolean' ? saved.construction.rod : DEFAULT_ROD;
+  return { style, shelves, rod };
+}
+
+function readPlacement(saved) {
+  const read = (value) =>
+    isNumberInRange(value, -MAX_PLACEMENT, MAX_PLACEMENT) ? value : 0;
+  return { x: read(saved?.placement?.x), z: read(saved?.placement?.z) };
+}
+
 export function loadSettings() {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -42,6 +67,7 @@ export function loadSettings() {
         height: readDimension(saved, 'height'),
         depth: readDimension(saved, 'depth'),
       },
+      construction: readConstruction(saved),
       materialKey: MATERIALS.some((m) => m.key === saved.materialKey)
         ? saved.materialKey
         : DEFAULT_MATERIAL,
@@ -50,6 +76,7 @@ export function loadSettings() {
         : TIME_OF_DAY.initial,
       dimensionsVisible:
         typeof saved.dimensionsVisible === 'boolean' ? saved.dimensionsVisible : true,
+      placement: readPlacement(saved),
     };
   } catch {
     return DEFAULT_SETTINGS;

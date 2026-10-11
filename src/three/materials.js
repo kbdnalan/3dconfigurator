@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { MATERIALS } from '../config.js';
 import { createWoodTexture } from './woodTexture.js';
 import { createParquetTexture } from './parquetTexture.js';
+import { createSkyTexture } from './skyTexture.js';
 
 const ROUGHNESS = {
   white: 0.78,
@@ -14,6 +15,7 @@ export function createMaterials(maxAnisotropy = 1) {
   const woodTexture = createWoodTexture(walnutColor);
   woodTexture.anisotropy = Math.min(8, maxAnisotropy);
 
+  const skyTexture = createSkyTexture();
   const parquetTexture = createParquetTexture();
   parquetTexture.anisotropy = Math.min(16, maxAnisotropy);
 
@@ -76,6 +78,17 @@ export function createMaterials(maxAnisotropy = 1) {
     emissiveIntensity: 0,
   });
 
+  const glass = new THREE.MeshStandardMaterial({
+    color: '#dce8ee',
+    roughness: 0.04,
+    metalness: 0,
+    transparent: true,
+    opacity: 0.14,
+    depthWrite: false,
+  });
+
+  const sky = new THREE.MeshBasicMaterial({ map: skyTexture, fog: false });
+
   const dimensionLine = new THREE.LineBasicMaterial({
     color: '#2b2e33',
     transparent: true,
@@ -93,10 +106,13 @@ export function createMaterials(maxAnisotropy = 1) {
       ceiling,
       lampShade,
       bulb,
+      glass,
+      sky,
       dimensionLine,
     ].forEach((m) => m.dispose());
     woodTexture.dispose();
     parquetTexture.dispose();
+    skyTexture.dispose();
   }
 
   return {
@@ -109,6 +125,8 @@ export function createMaterials(maxAnisotropy = 1) {
     ceiling,
     lampShade,
     bulb,
+    glass,
+    sky,
     dimensionLine,
     dispose,
   };

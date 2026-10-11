@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
@@ -9,13 +10,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createMaterials } from './materials.js';
 import { createCabinet, MM } from './createCabinet.js';
 import { createDimensions } from './createDimensions.js';
-import {
-  createRoom,
-  MIN_ROOM_DEPTH,
-  MIN_ROOM_WIDTH,
-  ROOM_HEIGHT,
-  WALL_GAP,
-} from './createRoom.js';
+import { createRoom, getRoomSize, ROOM_HEIGHT, WALL_CLEARANCE } from './createRoom.js';
 import { getDaylight } from './daylight.js';
 
 const DEFAULT_VIEW_DIRECTION = new THREE.Vector3(1.15, 0.55, 1).normalize();
@@ -25,11 +20,13 @@ const WALL_MARGIN = 0.1;
 const FLOOR_MARGIN = 0.12;
 const MAX_BELOW_CENTER_ANGLE = THREE.MathUtils.degToRad(20);
 const SUN_DISTANCE = 12;
-const ROOM_CLEARANCE = 0.4;
 const CEILING_CLEARANCE = 0.25;
 const DOOR_OPEN_ANGLE = THREE.MathUtils.degToRad(100);
-const DOOR_DURATION = 600;
+const OPEN_DURATION = 600;
+const RETARGET_DURATION = 450;
 const CLICK_TOLERANCE = 5;
+
+const ease = (t) => t * t * (3 - 2 * t);
 
 function disposeObject(object) {
   object.traverse((child) => {
@@ -38,29 +35,44 @@ function disposeObject(object) {
   });
 }
 
+function isLowPowerDevice() {
+  return window.matchMedia?.('(pointer: coarse)').matches ?? false;
+}
+
 export class SceneManager {
-  constructor(container) {
+  constructor(container, { onPlacementChange } = {}) {
     this.container = container;
+    this.onPlacementChange = onPlacementChange;
+    this.lowPower = isLowPowerDevice();
     this.frameId = null;
     this.disposed = false;
     this.dimensions = null;
+    this.construction = { style: 'doors', shelves: 1 };
     this.materialKey = 'white';
     this.cabinet = null;
     this.dimensionLines = null;
     this.room = null;
     this.dimensionsVisible = true;
     this.timeOfDay = 15;
+    this.mode = 'rotate';
     this.hasCameraView = false;
-    this.doorStates = new Map();
+    this.openStates = new Map();
     this.lastFrameTime = null;
+    this.shadowsDirty = true;
+    this.retarget = null;
+    this.drag = null;
 
     this.initRenderer();
     this.initScene();
     this.initCamera();
     this.initLights();
     this.initPostprocessing();
-    this.initDoorClick();
+    this.initPointer();
     this.materials = createMaterials(this.renderer.capabilities.getMaxAnisotropy());
+
+    this.placement = new THREE.Group();
+    this.placement.name = 'placement';
+    this.scene.add(this.placement);
 
     this.resizeObserver = new ResizeObserver(this.handleResize);
     this.resizeObserver.observe(container);
@@ -68,12 +80,16 @@ export class SceneManager {
   }
 
   initRenderer() {
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    const renderer = new THREE.WebGLRenderer({
+      antialias: false,
+      powerPreference: 'high-performance',
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.lowPower ? 1.25 : 1.5));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.shadowMap.autoUpdate = false;
     this.renderer = renderer;
     this.container.appendChild(renderer.domElement);
 
@@ -83,6 +99,7 @@ export class SceneManager {
   }
 
   initScene() {
+    RectAreaLightUniformsLib.init();
     const scene = new THREE.Scene();
     scene.background = new THREE.Color();
 
@@ -108,8 +125,6 @@ export class SceneManager {
     controls.rotateSpeed = 0.8;
     controls.zoomSpeed = 0.9;
     controls.minPolarAngle = 0.15;
-    controls.minAzimuthAngle = -Math.PI / 2;
-    controls.maxAzimuthAngle = Math.PI / 2;
     controls.addEventListener('change', this.requestRender);
     this.controls = controls;
   }
@@ -120,8 +135,9 @@ export class SceneManager {
 
     const sun = new THREE.DirectionalLight('#ffffff', 1);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.radius = 3;
+    const size = this.lowPower ? 1024 : 2048;
+    sun.shadow.mapSize.set(size, size);
+    sun.shadow.radius = 4;
     sun.shadow.bias = -0.0003;
     sun.shadow.normalBias = 0.03;
     this.scene.add(sun, sun.target);
@@ -131,7 +147,7 @@ export class SceneManager {
   initPostprocessing() {
     const renderTarget = new THREE.WebGLRenderTarget(1, 1, {
       type: THREE.HalfFloatType,
-      samples: 4,
+      samples: this.lowPower ? 2 : 4,
     });
     this.composer = new EffectComposer(this.renderer, renderTarget);
     this.composer.addPass(new RenderPass(this.scene, this.viewCamera));
@@ -146,6 +162,7 @@ export class SceneManager {
       samples: 12,
     });
     this.aoPass.updatePdMaterial({ radius: 6, rings: 2, samples: 12 });
+    this.aoPass.enabled = !this.lowPower;
     this.composer.addPass(this.aoPass);
 
     this.outputPass = new OutputPass();
@@ -155,27 +172,20 @@ export class SceneManager {
   setDimensions(dimensions) {
     if (this.disposed) return;
     this.dimensions = { ...dimensions };
-
-    this.removeObject(this.cabinet);
-    this.removeObject(this.dimensionLines);
-
-    this.cabinet = createCabinet(this.dimensions, this.materials, this.materialKey);
-    this.dimensionLines = createDimensions(this.dimensions, this.materials.dimensionLine);
-    this.dimensionLines.visible = this.dimensionsVisible;
-    this.scene.add(this.cabinet, this.dimensionLines);
-
-    const previousStates = this.doorStates;
-    this.doorStates = new Map(
-      this.cabinet.userData.doors.map(({ userData: { key } }) => [
-        key,
-        previousStates.get(key) ?? { target: 0, progress: 0 },
-      ]),
-    );
-    this.applyDoorAngles();
-
     this.updateRoom();
+    this.rebuildCabinet();
+    this.setPlacementPosition(this.placement.position.x, this.placement.position.z);
     this.applyDaylight();
     this.fitCamera();
+    this.requestRender();
+  }
+
+  setConstruction(construction) {
+    if (this.disposed) return;
+    this.construction = { ...construction };
+    if (!this.dimensions) return;
+    this.rebuildCabinet();
+    this.fitCamera({ onlyIfCut: true });
     this.requestRender();
   }
 
@@ -198,13 +208,6 @@ export class SceneManager {
     this.requestRender();
   }
 
-  resetView() {
-    if (this.disposed) return;
-    this.hasCameraView = false;
-    this.fitCamera();
-    this.requestRender();
-  }
-
   setDimensionsVisible(visible) {
     if (this.disposed) return;
     this.dimensionsVisible = visible;
@@ -212,33 +215,81 @@ export class SceneManager {
     this.requestRender();
   }
 
-  updateRoom() {
-    const { D, H } = this.getSize();
-    const target = new THREE.Vector3(0, H / 2, 0);
-    const view = this.getCeilingSafeView(DEFAULT_VIEW_DIRECTION, target, 1, false);
-    const camera = view.direction.clone().multiplyScalar(view.distance);
-    const roundUp = (value) => Math.ceil(value * 10) / 10;
-    const width = roundUp(
-      Math.max(MIN_ROOM_WIDTH, 2 * (Math.abs(camera.x) + ROOM_CLEARANCE)),
-    );
-    const depth = roundUp(
-      Math.max(MIN_ROOM_DEPTH, D / 2 + WALL_GAP + camera.z + ROOM_CLEARANCE),
-    );
+  setMode(mode) {
+    if (this.disposed) return;
+    this.mode = mode;
+    this.controls.enableRotate = mode === 'rotate';
+    this.renderer.domElement.style.cursor = mode === 'move' ? 'grab' : '';
+  }
 
-    const size = this.room?.userData;
-    if (!size || size.width !== width || size.depth !== depth) {
-      this.disposeRoom();
-      this.room = createRoom(this.materials, width, depth);
-      this.materials.floor.map.repeat.set(width, depth);
-      this.scene.add(this.room);
-      this.updateSunShadow(width, depth);
+  setPlacement(x, z) {
+    if (this.disposed || !this.dimensions) return;
+    const current = this.placement.position;
+    if (Math.abs(current.x - x) < 1e-4 && Math.abs(current.z - z) < 1e-4) return;
+    const before = current.clone();
+    this.setPlacementPosition(x, z);
+    const delta = current.clone().sub(before);
+    this.controls.target.add(delta);
+    this.camera.position.add(delta);
+    this.controls.update();
+    this.requestRender();
+  }
+
+  resetView() {
+    if (this.disposed) return;
+    this.hasCameraView = false;
+    this.retarget = null;
+    this.fitCamera();
+    this.requestRender();
+  }
+
+  rebuildCabinet() {
+    this.disposePlacementChildren();
+
+    this.cabinet = createCabinet(
+      this.dimensions,
+      this.construction,
+      this.materials,
+      this.materialKey,
+    );
+    this.dimensionLines = createDimensions(this.dimensions, this.materials.dimensionLine);
+    this.dimensionLines.visible = this.dimensionsVisible;
+    this.placement.add(this.cabinet, this.dimensionLines);
+
+    const previous = this.openStates;
+    this.openStates = new Map(
+      this.cabinet.userData.movables.map(({ userData: { key } }) => [
+        key,
+        previous.get(key) ?? { target: 0, progress: 0 },
+      ]),
+    );
+    this.applyOpenStates();
+    this.shadowsDirty = true;
+  }
+
+  disposePlacementChildren() {
+    for (const child of [this.cabinet, this.dimensionLines]) {
+      if (!child) continue;
+      this.placement.remove(child);
+      disposeObject(child);
     }
-    this.room.position.z = -D / 2 - WALL_GAP;
-    this.room.userData.lamp.position.z = (D + WALL_GAP + depth) / 2;
+  }
+
+  updateRoom() {
+    const { width, depth } = getRoomSize(this.dimensions.width, this.dimensions.depth);
+    const size = this.room?.userData;
+    if (size && size.width === width && size.depth === depth) return;
+
+    this.disposeRoom();
+    this.room = createRoom(this.materials, width, depth, this.lowPower ? 512 : 1024);
+    this.materials.floor.map.repeat.set(width, depth);
+    this.scene.add(this.room);
+    this.updateSunShadow(width, depth);
+    this.shadowsDirty = true;
   }
 
   updateSunShadow(width, depth) {
-    const extent = Math.hypot(width, depth, ROOM_HEIGHT) / 2 + 0.5;
+    const extent = Math.hypot(width, depth, ROOM_HEIGHT) / 2 + 0.3;
     const camera = this.sun.shadow.camera;
     camera.left = -extent;
     camera.right = extent;
@@ -252,18 +303,45 @@ export class SceneManager {
   disposeRoom() {
     if (!this.room) return;
     this.room.userData.lampLight.dispose();
-    this.removeObject(this.room);
+    this.room.userData.windowLight.dispose();
+    this.scene.remove(this.room);
+    disposeObject(this.room);
     this.room = null;
+  }
+
+  getPlacementLimit() {
+    const { W, D } = this.getSize();
+    const { innerLimit } = this.room.userData;
+    return {
+      x: Math.max(0, innerLimit.x - W / 2 - WALL_CLEARANCE),
+      z: Math.max(0, innerLimit.z - D / 2 - WALL_CLEARANCE),
+    };
+  }
+
+  setPlacementPosition(x, z) {
+    const limit = this.getPlacementLimit();
+    const clampedX = THREE.MathUtils.clamp(x, -limit.x, limit.x);
+    const clampedZ = THREE.MathUtils.clamp(z, -limit.z, limit.z);
+    this.placement.position.set(clampedX, 0, clampedZ);
+    this.shadowsDirty = true;
+
+    if (Math.abs(clampedX - x) > 1e-4 || Math.abs(clampedZ - z) > 1e-4) {
+      this.reportPlacement();
+    }
+  }
+
+  reportPlacement() {
+    const { x, z } = this.placement.position;
+    this.onPlacementChange?.({
+      x: Math.round(x * 1000) / 1000,
+      z: Math.round(z * 1000) / 1000,
+    });
   }
 
   applyDaylight() {
     if (!this.room) return;
     const light = getDaylight(this.timeOfDay);
-    const center = new THREE.Vector3(
-      0,
-      ROOM_HEIGHT / 2,
-      this.room.position.z + this.room.userData.depth / 2,
-    );
+    const center = new THREE.Vector3(0, ROOM_HEIGHT / 2, 0);
 
     this.sun.position.copy(center).addScaledVector(light.direction, SUN_DISTANCE);
     this.sun.target.position.copy(center);
@@ -272,86 +350,177 @@ export class SceneManager {
     this.sun.intensity = light.sunIntensity;
     this.sun.shadow.autoUpdate = light.sunIntensity > 0;
 
+    const { lampLight, windowLight } = this.room.userData;
+    windowLight.color.copy(light.windowColor);
+    windowLight.intensity = Math.max(0, light.windowIntensity);
+    lampLight.intensity = light.lampIntensity;
+    lampLight.shadow.autoUpdate = light.lampIntensity > 0;
+
     this.scene.background.copy(light.skyColor);
     this.scene.environmentIntensity = light.environmentIntensity;
     this.ambientLight.intensity = light.ambientIntensity;
-    const lamp = this.room.userData.lampLight;
-    lamp.intensity = light.lampIntensity;
-    lamp.shadow.autoUpdate = light.lampIntensity > 0;
+    this.materials.sky.color.copy(light.skyTint);
     this.materials.bulb.emissiveIntensity = light.lampIntensity * 0.6;
     this.renderer.toneMappingExposure = light.exposure;
+    this.shadowsDirty = true;
   }
 
-  initDoorClick() {
+  initPointer() {
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
-    this.pointerDownPosition = null;
+    this.floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    this.floorPoint = new THREE.Vector3();
+    this.pointerDown = null;
 
     const canvas = this.renderer.domElement;
-    canvas.addEventListener('pointerdown', this.handlePointerDown);
-    canvas.addEventListener('pointerup', this.handlePointerUp);
+    canvas.addEventListener('pointerdown', this.handlePointerDown, { capture: true });
     canvas.addEventListener('pointermove', this.handlePointerMove);
+    canvas.addEventListener('pointerup', this.handlePointerUp);
+    canvas.addEventListener('pointercancel', this.handlePointerCancel);
   }
 
-  getDoorUnderPointer(event) {
-    const doors = this.cabinet?.userData.doors;
-    if (!doors) return null;
-
+  setRayFromEvent(event) {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set(
       ((event.clientX - rect.left) / rect.width) * 2 - 1,
       -((event.clientY - rect.top) / rect.height) * 2 + 1,
     );
     this.raycaster.setFromCamera(this.pointer, this.viewCamera);
+  }
+
+  getMovableUnderPointer(event) {
+    const movables = this.cabinet?.userData.movables;
+    if (!movables?.length) return null;
+    this.setRayFromEvent(event);
 
     const [hit] = this.raycaster.intersectObject(this.cabinet, true);
     if (!hit) return null;
-
     for (let object = hit.object; object; object = object.parent) {
-      if (doors.includes(object)) return object;
+      if (movables.includes(object)) return object;
     }
     return null;
   }
 
+  getFloorPoint(event) {
+    this.setRayFromEvent(event);
+    return this.raycaster.ray.intersectPlane(this.floorPlane, this.floorPoint)?.clone();
+  }
+
   handlePointerDown = (event) => {
-    this.pointerDownPosition = event.isPrimary
-      ? { x: event.clientX, y: event.clientY }
-      : null;
-  };
+    if (!event.isPrimary) {
+      this.cancelDrag();
+      this.pointerDown = null;
+      return;
+    }
+    this.pointerDown = { x: event.clientX, y: event.clientY };
 
-  handlePointerUp = (event) => {
-    const start = this.pointerDownPosition;
-    this.pointerDownPosition = null;
-    if (!start || !event.isPrimary) return;
-
-    const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
-    if (moved > CLICK_TOLERANCE) return;
-
-    const door = this.getDoorUnderPointer(event);
-    if (door) this.toggleDoor(door.userData.key);
+    if (this.mode !== 'move' || !this.dimensions) return;
+    const floorPoint = this.getFloorPoint(event);
+    if (!floorPoint) return;
+    this.drag = {
+      pointerId: event.pointerId,
+      startFloor: floorPoint,
+      startPlacement: this.placement.position.clone(),
+      moved: false,
+    };
+    this.renderer.domElement.setPointerCapture?.(event.pointerId);
+    this.renderer.domElement.style.cursor = 'grabbing';
   };
 
   handlePointerMove = (event) => {
+    if (this.drag && event.pointerId === this.drag.pointerId) {
+      const moved = Math.hypot(
+        event.clientX - this.pointerDown.x,
+        event.clientY - this.pointerDown.y,
+      );
+      if (!this.drag.moved && moved <= CLICK_TOLERANCE) return;
+      this.drag.moved = true;
+
+      const floorPoint = this.getFloorPoint(event);
+      if (!floorPoint) return;
+      const next = this.drag.startPlacement
+        .clone()
+        .add(floorPoint.sub(this.drag.startFloor));
+      this.setPlacementPosition(next.x, next.z);
+      this.requestRender();
+      return;
+    }
+
     if (event.pointerType !== 'mouse' || event.buttons !== 0) return;
-    this.renderer.domElement.style.cursor = this.getDoorUnderPointer(event)
-      ? 'pointer'
-      : '';
+    const overMovable = Boolean(this.getMovableUnderPointer(event));
+    const idle = this.mode === 'move' ? 'grab' : '';
+    this.renderer.domElement.style.cursor = overMovable ? 'pointer' : idle;
   };
 
-  toggleDoor(key) {
-    const state = this.doorStates.get(key);
+  handlePointerUp = (event) => {
+    const start = this.pointerDown;
+    const drag = this.drag;
+    this.pointerDown = null;
+    this.drag = null;
+    if (this.mode === 'move') this.renderer.domElement.style.cursor = 'grab';
+    if (!start || !event.isPrimary) return;
+
+    if (drag?.moved) {
+      this.reportPlacement();
+      this.startRetarget();
+      return;
+    }
+
+    const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
+    if (moved > CLICK_TOLERANCE) return;
+    const part = this.getMovableUnderPointer(event);
+    if (part) this.toggleOpen(part.userData.key);
+  };
+
+  handlePointerCancel = () => {
+    this.cancelDrag();
+    this.pointerDown = null;
+  };
+
+  cancelDrag() {
+    if (!this.drag) return;
+    if (this.drag.moved) {
+      this.reportPlacement();
+      this.startRetarget();
+    }
+    this.drag = null;
+    if (this.mode === 'move') this.renderer.domElement.style.cursor = 'grab';
+  }
+
+  startRetarget() {
+    const { H } = this.getSize();
+    const to = this.placement.position.clone().setY(H / 2);
+    this.retarget = { from: this.controls.target.clone(), to, startedAt: null };
+    this.requestRender();
+  }
+
+  updateRetarget(now) {
+    if (!this.retarget) return false;
+    if (this.retarget.startedAt === null) this.retarget.startedAt = now;
+    const t = Math.min(1, (now - this.retarget.startedAt) / RETARGET_DURATION);
+    this.controls.target.lerpVectors(this.retarget.from, this.retarget.to, ease(t));
+    if (t >= 1) {
+      this.retarget = null;
+      this.fitCamera({ onlyIfCut: true });
+      return false;
+    }
+    return true;
+  }
+
+  toggleOpen(key) {
+    const state = this.openStates.get(key);
     if (!state) return;
     state.target = state.target === 1 ? 0 : 1;
     this.requestRender();
   }
 
-  updateDoors(now) {
+  updateOpenStates(now) {
     const delta = this.lastFrameTime === null ? 16 : now - this.lastFrameTime;
-    const step = delta / DOOR_DURATION;
+    const step = delta / OPEN_DURATION;
     let changed = false;
     let moving = false;
 
-    for (const state of this.doorStates.values()) {
+    for (const state of this.openStates.values()) {
       if (state.progress === state.target) continue;
       state.progress =
         state.target > state.progress
@@ -362,18 +531,21 @@ export class SceneManager {
     }
 
     if (!changed) return false;
-    this.applyDoorAngles();
+    this.applyOpenStates();
+    this.shadowsDirty = true;
     this.fitCamera({ onlyIfCut: true });
     return moving;
   }
 
-  applyDoorAngles() {
-    for (const pivot of this.cabinet?.userData.doors ?? []) {
-      const { key, sign } = pivot.userData;
-      const t = this.doorStates.get(key)?.progress ?? 0;
-      const eased = t * t * (3 - 2 * t);
-      pivot.userData.angle = eased * DOOR_OPEN_ANGLE;
-      pivot.rotation.y = sign * pivot.userData.angle;
+  applyOpenStates() {
+    for (const part of this.cabinet?.userData.movables ?? []) {
+      const data = part.userData;
+      data.amount = ease(this.openStates.get(data.key)?.progress ?? 0);
+      if (data.type === 'door') {
+        part.rotation.y = data.sign * data.amount * DOOR_OPEN_ANGLE;
+      } else {
+        part.position.z = data.closedZ + data.amount * data.travel;
+      }
     }
   }
 
@@ -382,7 +554,7 @@ export class SceneManager {
     return { W: width * MM, H: height * MM, D: depth * MM };
   }
 
-  getFitDistance(direction, target, includeDoors = true) {
+  getFitDistance(direction, localTarget) {
     const { W, H, D } = this.getSize();
     const m = DIMENSION_MARGIN;
     const radius = Math.sqrt(W * W + H * H + D * D) / 2 + m;
@@ -401,20 +573,27 @@ export class SceneManager {
       }
     }
 
-    const doors = includeDoors ? (this.cabinet?.userData.doors ?? []) : [];
-    for (const pivot of doors) {
-      const { angle = 0, hingeX, sign, width } = pivot.userData;
-      if (angle <= 0) continue;
-      const edgeX = hingeX - sign * width * Math.cos(angle);
-      const edgeZ = D / 2 + width * Math.sin(angle) + 0.05;
-      for (const x of [edgeX - 0.05, edgeX + 0.05]) {
-        points.push(new THREE.Vector3(x, 0, edgeZ), new THREE.Vector3(x, H, edgeZ));
+    for (const part of this.cabinet?.userData.movables ?? []) {
+      const { type, amount = 0 } = part.userData;
+      if (amount <= 0) continue;
+      if (type === 'door') {
+        const { hingeX, sign, width } = part.userData;
+        const angle = amount * DOOR_OPEN_ANGLE;
+        const edgeX = hingeX - sign * width * Math.cos(angle);
+        const edgeZ = D / 2 + width * Math.sin(angle) + 0.05;
+        points.push(
+          new THREE.Vector3(edgeX, 0, edgeZ),
+          new THREE.Vector3(edgeX, H, edgeZ),
+        );
+      } else {
+        const z = D / 2 + amount * part.userData.travel + 0.05;
+        points.push(new THREE.Vector3(-W / 2, 0, z), new THREE.Vector3(W / 2, H, z));
       }
     }
 
     let distance = 0;
     for (const point of points) {
-      const offset = point.sub(target);
+      const offset = point.sub(localTarget);
       const depth = offset.dot(direction);
       distance = Math.max(
         distance,
@@ -425,10 +604,27 @@ export class SceneManager {
     return { radius, distance: distance * 1.08 };
   }
 
+  getCeilingSafeView(preferred, localTarget, zoom = 1) {
+    let direction = preferred.clone();
+    let fit = this.getFitDistance(direction, localTarget);
+    const maxRise = ROOM_HEIGHT - CEILING_CLEARANCE - localTarget.y;
+
+    if (direction.y * fit.distance * zoom > maxRise) {
+      const y = THREE.MathUtils.clamp(maxRise / (fit.distance * zoom), -0.2, 1);
+      direction = new THREE.Vector3(direction.x, 0, direction.z)
+        .normalize()
+        .multiplyScalar(Math.sqrt(1 - y * y))
+        .setY(y);
+      fit = this.getFitDistance(direction, localTarget);
+    }
+    return { direction, ...fit };
+  }
+
   fitCamera({ onlyIfCut = false } = {}) {
     if (!this.dimensions) return;
     const { H } = this.getSize();
-    const target = new THREE.Vector3(0, H / 2, 0);
+    const localTarget = new THREE.Vector3(0, H / 2, 0);
+    const target = this.placement.position.clone().add(localTarget);
 
     const preferred = this.hasCameraView
       ? this.camera.position.clone().sub(this.controls.target).normalize()
@@ -437,7 +633,7 @@ export class SceneManager {
     const currentDistance = this.camera.position.distanceTo(this.controls.target);
     const { direction, radius, distance } = this.getCeilingSafeView(
       preferred,
-      target,
+      localTarget,
       zoom,
     );
 
@@ -450,26 +646,12 @@ export class SceneManager {
       return;
     }
 
-    this.controls.target.copy(target);
-    this.camera.position.copy(target).addScaledVector(direction, distance * zoom);
+    if (!this.retarget) this.controls.target.copy(target);
+    this.camera.position
+      .copy(this.controls.target)
+      .addScaledVector(direction, distance * zoom);
     this.hasCameraView = true;
     this.controls.update();
-  }
-
-  getCeilingSafeView(preferred, target, zoom = 1, includeDoors = true) {
-    let direction = preferred.clone();
-    let fit = this.getFitDistance(direction, target, includeDoors);
-    const maxRise = ROOM_HEIGHT - CEILING_CLEARANCE - target.y;
-
-    if (direction.y * fit.distance * zoom > maxRise) {
-      const y = THREE.MathUtils.clamp(maxRise / (fit.distance * zoom), -0.2, 1);
-      direction = new THREE.Vector3(direction.x, 0, direction.z)
-        .normalize()
-        .multiplyScalar(Math.sqrt(1 - y * y))
-        .setY(y);
-      fit = this.getFitDistance(direction, target, includeDoors);
-    }
-    return { direction, ...fit };
   }
 
   getFloorLimit() {
@@ -489,7 +671,6 @@ export class SceneManager {
     let scale = 1;
 
     if (this.room) {
-      const backZ = this.room.position.z;
       const { width, depth } = this.room.userData;
       const limit = (origin, delta, min, max) => {
         if (delta < 0 && origin + delta < min) return (min - origin) / delta;
@@ -498,7 +679,7 @@ export class SceneManager {
       };
       scale = Math.min(
         limit(target.x, offset.x, -width / 2 + WALL_MARGIN, width / 2 - WALL_MARGIN),
-        limit(target.z, offset.z, backZ + WALL_MARGIN, backZ + depth - WALL_MARGIN),
+        limit(target.z, offset.z, -depth / 2 + WALL_MARGIN, depth / 2 - WALL_MARGIN),
         limit(target.y, offset.y, this.getFloorLimit(), ROOM_HEIGHT - WALL_MARGIN),
       );
     }
@@ -532,22 +713,21 @@ export class SceneManager {
 
   renderFrame = (now) => {
     this.frameId = null;
-    const doorMoving = this.updateDoors(now);
-    this.lastFrameTime = doorMoving ? now : null;
+    const opening = this.updateOpenStates(now);
+    const retargeting = this.updateRetarget(now);
+    this.lastFrameTime = opening ? now : null;
 
     this.controls.update();
     this.updateViewCamera();
+    if (this.shadowsDirty) {
+      this.renderer.shadowMap.needsUpdate = true;
+      this.shadowsDirty = false;
+    }
     this.composer.render();
     this.labelRenderer.render(this.scene, this.viewCamera);
 
-    if (doorMoving) this.requestRender();
+    if (opening || retargeting) this.requestRender();
   };
-
-  removeObject(object) {
-    if (!object) return;
-    this.scene.remove(object);
-    disposeObject(object);
-  }
 
   dispose() {
     if (this.disposed) return;
@@ -558,12 +738,12 @@ export class SceneManager {
     this.controls.removeEventListener('change', this.requestRender);
     this.controls.dispose();
     const canvas = this.renderer.domElement;
-    canvas.removeEventListener('pointerdown', this.handlePointerDown);
-    canvas.removeEventListener('pointerup', this.handlePointerUp);
+    canvas.removeEventListener('pointerdown', this.handlePointerDown, { capture: true });
     canvas.removeEventListener('pointermove', this.handlePointerMove);
+    canvas.removeEventListener('pointerup', this.handlePointerUp);
+    canvas.removeEventListener('pointercancel', this.handlePointerCancel);
 
-    this.removeObject(this.cabinet);
-    this.removeObject(this.dimensionLines);
+    this.disposePlacementChildren();
     this.disposeRoom();
     this.materials.dispose();
     this.environmentMap.dispose();

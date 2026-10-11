@@ -11,6 +11,9 @@ const SUN_LOW = new THREE.Color('#ff9a52');
 const SKY_DAY = new THREE.Color('#bdd6ec');
 const SKY_SUNSET = new THREE.Color('#f0ad78');
 const SKY_NIGHT = new THREE.Color('#283048');
+const TINT_DAY = new THREE.Color('#ffffff');
+const TINT_SUNSET = new THREE.Color('#ffb98c');
+const TINT_NIGHT = new THREE.Color('#1c2236');
 
 const { clamp, lerp, smoothstep } = THREE.MathUtils;
 
@@ -32,14 +35,21 @@ export function getDaylight(hours) {
     .lerp(SKY_DAY, smoothstep(height, 0.15, 0.55))
     .lerp(SKY_NIGHT, dusk);
   const daylight = smoothstep(height, 0, 0.5);
+  const skyTint = TINT_SUNSET.clone()
+    .lerp(TINT_DAY, smoothstep(height, 0.15, 0.55))
+    .lerp(TINT_NIGHT, dusk);
+  const windowColor = skyColor.clone().lerp(TINT_DAY, 0.55);
 
   return {
     direction,
     sunColor,
     skyColor,
+    skyTint,
+    windowColor,
+    windowIntensity: 0.4 + 5.6 * daylight - 0.35 * dusk,
     sunIntensity: 4.2 * smoothstep(height, 0, 0.22),
-    environmentIntensity: 0.14 + 0.34 * daylight,
-    ambientIntensity: 0.12 + 0.24 * daylight,
+    environmentIntensity: 0.16 + 0.3 * daylight,
+    ambientIntensity: 0.16 + 0.26 * daylight,
     lampIntensity: 7 * smoothstep(hours, 17.5, 20),
     exposure: 1 + 0.2 * dusk,
   };

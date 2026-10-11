@@ -32,3 +32,13 @@ export const TIME_OF_DAY = {
   night: 21,
   nightFrom: 20,
 };
+
+export const CABINET_STYLES = [
+  { key: 'doors', label: 'С дверцами' },
+  { key: 'drawers', label: 'С ящиками' },
+  { key: 'open', label: 'Открытый' },
+];
+
+export const DEFAULT_STYLE = 'doors';
+export const DEFAULT_SHELVES = 1;
+export const DEFAULT_ROD = false;

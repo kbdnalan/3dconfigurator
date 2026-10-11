@@ -1,41 +1,39 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import {
+  BACK,
+  DRAWER_WALL,
+  FRONT,
+  PANEL,
+  PLINTH_HEIGHT,
+  PLINTH_INSET,
+  ROD_DIAMETER,
+  getCabinetLayout,
+} from '../utils/cabinetLayout.js';
 
 export const MM = 0.001;
-
-const PANEL = 18 * MM;
-const BACK = 6 * MM;
-const DOOR = 18 * MM;
-const DOOR_REVEAL = 2 * MM;
-const DOOR_CLEARANCE = 1 * MM;
-const DOORS_CENTER_GAP = 3 * MM;
-const PLINTH_HEIGHT = 80 * MM;
-const PLINTH_INSET = 40 * MM;
-const SHELF_SETBACK = 20 * MM;
-const SHELF_STEP = 380 * MM;
-const DOUBLE_DOOR_FROM_WIDTH = 800;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 function createPanel(name, size, position, material, rounded = false) {
-  const [sx, sy, sz] = size;
+  const [sx, sy, sz] = size.map((v) => v * MM);
   const geometry = rounded
     ? new RoundedBoxGeometry(sx, sy, sz, 2, 1.5 * MM)
     : new THREE.BoxGeometry(sx, sy, sz);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = name;
-  mesh.position.set(...position);
+  mesh.position.set(...position.map((v) => v * MM));
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   mesh.userData.part = 'body';
   return mesh;
 }
 
-function createHandle(doorWidth, doorHeight, side, material) {
+function createHandle(lengthMm, material) {
   const group = new THREE.Group();
   group.name = 'handle';
 
-  const length = clamp(doorHeight * 0.18, 70 * MM, 200 * MM);
+  const length = lengthMm * MM;
   const barRadius = 5 * MM;
   const postRadius = 3.5 * MM;
   const postLength = 22 * MM;
@@ -60,55 +58,134 @@ function createHandle(doorWidth, doorHeight, side, material) {
     mesh.receiveShadow = true;
     group.add(mesh);
   });
-
-  const sideInset = clamp(doorWidth * 0.08, 35 * MM, 60 * MM);
-  group.position.set(side * (doorWidth / 2 - sideInset), 0, DOOR / 2);
   return group;
 }
 
-function createDoor({
-  key,
-  hingeX,
-  sign,
-  width,
-  height,
-  centerY,
-  frontZ,
-  materials,
-  body,
-}) {
+function createDoor(door, frontZ, materials, body) {
+  const { key, hingeX, sign, width, height, centerY } = door;
   const pivot = new THREE.Group();
-  pivot.name = `door-pivot-${key}`;
-  pivot.position.set(hingeX, 0, frontZ - DOOR);
+  pivot.name = `door-${key}`;
+  pivot.position.set(hingeX * MM, 0, (frontZ - FRONT) * MM);
 
-  const door = createPanel(
+  const panel = createPanel(
     `door-${key}`,
-    [width, height, DOOR],
-    [(-sign * width) / 2, centerY, DOOR / 2],
+    [width, height, FRONT],
+    [(-sign * width) / 2, centerY, FRONT / 2],
     body,
     true,
   );
-  door.add(createHandle(width, height, -sign, materials.handle));
-  pivot.add(door);
+  const handle = createHandle(clamp(height * 0.18, 70, 200), materials.handle);
+  const sideInset = clamp(width * 0.08, 35, 60);
+  handle.position.set(-sign * (width / 2 - sideInset) * MM, 0, (FRONT / 2) * MM);
+  panel.add(handle);
+  pivot.add(panel);
 
-  pivot.userData = { key, sign, hingeX, width };
+  pivot.userData = {
+    key: `door-${key}`,
+    type: 'door',
+    sign,
+    hingeX: hingeX * MM,
+    width: width * MM,
+  };
   return pivot;
 }
 
-export function createCabinet(dimensions, materials, materialKey) {
-  const W = dimensions.width * MM;
-  const H = dimensions.height * MM;
-  const D = dimensions.depth * MM;
-  const body = materials.body[materialKey];
+function createDrawer(drawer, box, frontZ, materials, body) {
+  const { index, width, height, centerY } = drawer;
+  const group = new THREE.Group();
+  group.name = `drawer-${index}`;
+  group.position.set(0, centerY * MM, (frontZ - FRONT / 2) * MM);
 
-  const carcassDepth = D - DOOR - DOOR_CLEARANCE;
-  const backZ = -D / 2;
+  group.add(createPanel('drawer-front', [width, height, FRONT], [0, 0, 0], body, true));
+
+  const handle = createHandle(clamp(width * 0.3, 100, 320), materials.handle);
+  handle.rotation.z = Math.PI / 2;
+  handle.position.z = (FRONT / 2) * MM;
+  group.add(handle);
+
+  const boxBack = -FRONT / 2 - box.depth;
+  const boxCenterZ = -FRONT / 2 - box.depth / 2;
+  const boxBottom = -height / 2 + 20;
+  const boxCenterY = boxBottom + box.height / 2;
+  const sideX = box.width / 2 - DRAWER_WALL / 2;
+  const innerBoxWidth = box.width - 2 * DRAWER_WALL;
+  group.add(
+    createPanel(
+      'drawer-side',
+      [DRAWER_WALL, box.height, box.depth],
+      [-sideX, boxCenterY, boxCenterZ],
+      body,
+    ),
+    createPanel(
+      'drawer-side',
+      [DRAWER_WALL, box.height, box.depth],
+      [sideX, boxCenterY, boxCenterZ],
+      body,
+    ),
+    createPanel(
+      'drawer-back',
+      [innerBoxWidth, box.height, DRAWER_WALL],
+      [0, boxCenterY, boxBack + DRAWER_WALL / 2],
+      body,
+    ),
+    createPanel(
+      'drawer-bottom',
+      [innerBoxWidth, 8, box.depth - DRAWER_WALL],
+      [0, boxBottom + 4, boxCenterZ + DRAWER_WALL / 2],
+      body,
+    ),
+  );
+
+  group.userData = {
+    key: `drawer-${index}`,
+    type: 'drawer',
+    closedZ: group.position.z,
+    travel: box.depth * 0.75 * MM,
+  };
+  return group;
+}
+
+function createRod(rod, materials) {
+  const group = new THREE.Group();
+  group.name = 'rod';
+  const radius = (ROD_DIAMETER / 2) * MM;
+
+  const bar = new THREE.Mesh(
+    new THREE.CylinderGeometry(radius, radius, rod.length * MM, 24),
+    materials.handle,
+  );
+  bar.rotation.z = Math.PI / 2;
+  group.add(bar);
+
+  const holderGeometry = new THREE.CylinderGeometry(
+    radius * 1.8,
+    radius * 1.8,
+    8 * MM,
+    24,
+  );
+  holderGeometry.rotateZ(Math.PI / 2);
+  for (const side of [-1, 1]) {
+    const holder = new THREE.Mesh(holderGeometry, materials.handle);
+    holder.position.x = side * (rod.length / 2 - 4) * MM;
+    group.add(holder);
+  }
+
+  group.traverse((child) => {
+    child.castShadow = true;
+    child.receiveShadow = true;
+  });
+  group.position.set(0, rod.y * MM, rod.z * MM);
+  return group;
+}
+
+export function createCabinet(dimensions, construction, materials, materialKey) {
+  const layout = getCabinetLayout(dimensions, construction);
+  const { W, H, D, carcassDepth, backZ, innerWidth, innerBottom, innerHeight } = layout;
+  const body = materials.body[materialKey];
   const carcassFrontZ = backZ + carcassDepth;
   const carcassCenterZ = backZ + carcassDepth / 2;
-  const innerWidth = W - 2 * PANEL;
-  const innerBottom = PLINTH_HEIGHT + PANEL;
-  const innerTop = H - PANEL;
-  const innerHeight = innerTop - innerBottom;
+  const sideHeight = H - PANEL;
+  const sideX = W / 2 - PANEL / 2;
 
   const cabinet = new THREE.Group();
   cabinet.name = 'cabinet';
@@ -120,46 +197,30 @@ export function createCabinet(dimensions, materials, materialKey) {
       [0, H - PANEL / 2, carcassCenterZ],
       body,
     ),
-  );
-
-  const sideHeight = H - PANEL;
-  const sideX = W / 2 - PANEL / 2;
-  cabinet.add(
     createPanel(
       'side-left',
       [PANEL, sideHeight, carcassDepth],
       [-sideX, sideHeight / 2, carcassCenterZ],
       body,
     ),
-  );
-  cabinet.add(
     createPanel(
       'side-right',
       [PANEL, sideHeight, carcassDepth],
       [sideX, sideHeight / 2, carcassCenterZ],
       body,
     ),
-  );
-
-  cabinet.add(
     createPanel(
       'bottom',
       [innerWidth, PANEL, carcassDepth],
       [0, PLINTH_HEIGHT + PANEL / 2, carcassCenterZ],
       body,
     ),
-  );
-
-  cabinet.add(
     createPanel(
       'plinth',
       [innerWidth, PLINTH_HEIGHT, PANEL],
       [0, PLINTH_HEIGHT / 2, carcassFrontZ - PLINTH_INSET - PANEL / 2],
       body,
     ),
-  );
-
-  cabinet.add(
     createPanel(
       'back',
       [innerWidth, innerHeight, BACK],
@@ -168,63 +229,26 @@ export function createCabinet(dimensions, materials, materialKey) {
     ),
   );
 
-  const shelfCount = Math.max(0, Math.round(innerHeight / SHELF_STEP) - 1);
-  const shelfDepth = carcassDepth - BACK - SHELF_SETBACK;
-  for (let i = 1; i <= shelfCount; i += 1) {
+  layout.shelves.forEach((y, i) => {
     cabinet.add(
       createPanel(
-        `shelf-${i}`,
-        [innerWidth, PANEL, shelfDepth],
-        [
-          0,
-          innerBottom + (innerHeight * i) / (shelfCount + 1),
-          backZ + BACK + shelfDepth / 2,
-        ],
+        `shelf-${i + 1}`,
+        [innerWidth, PANEL, layout.shelfDepth],
+        [0, y, backZ + BACK + layout.shelfDepth / 2],
         body,
       ),
     );
-  }
+  });
 
-  const doorHeight = H - PLINTH_HEIGHT - 2 * DOOR_REVEAL;
-  const doorCenterY = PLINTH_HEIGHT + DOOR_REVEAL + doorHeight / 2;
-  const common = {
-    height: doorHeight,
-    centerY: doorCenterY,
-    frontZ: D / 2,
-    materials,
-    body,
-  };
+  if (layout.rod) cabinet.add(createRod(layout.rod, materials));
 
-  const doors =
-    dimensions.width >= DOUBLE_DOOR_FROM_WIDTH
-      ? [
-          createDoor({
-            ...common,
-            key: 'left',
-            hingeX: -W / 2 + DOOR_REVEAL,
-            sign: -1,
-            width: (W - 2 * DOOR_REVEAL - DOORS_CENTER_GAP) / 2,
-          }),
-          createDoor({
-            ...common,
-            key: 'right',
-            hingeX: W / 2 - DOOR_REVEAL,
-            sign: 1,
-            width: (W - 2 * DOOR_REVEAL - DOORS_CENTER_GAP) / 2,
-          }),
-        ]
-      : [
-          createDoor({
-            ...common,
-            key: 'left',
-            hingeX: -W / 2 + DOOR_REVEAL,
-            sign: -1,
-            width: W - 2 * DOOR_REVEAL,
-          }),
-        ];
-
-  doors.forEach((pivot) => cabinet.add(pivot));
-  cabinet.userData.doors = doors;
-
+  const movables = [
+    ...layout.doors.map((door) => createDoor(door, D / 2, materials, body)),
+    ...layout.drawers.map((drawer) =>
+      createDrawer(drawer, layout.drawerBox, D / 2, materials, body),
+    ),
+  ];
+  movables.forEach((part) => cabinet.add(part));
+  cabinet.userData.movables = movables;
   return cabinet;
 }
